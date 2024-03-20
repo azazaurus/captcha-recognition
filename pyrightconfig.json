@@ -1,0 +1,11 @@
+{
+	"include": ["src"],
+	"exclude": [
+		".git",
+		"**/__pycache__",
+		"**/venv",
+		"**/site-packages"
+	],
+	"strict": ["src"],
+	"extraPaths": ["venv/Lib/site-packages"]
+}
