@@ -107,11 +107,10 @@ def main(
     test_target: List[LongTensor] = target_to_tensors(test_target, batch_size)
 
     model = (norse.torch.SequentialState(
-            snn.Lift(torch.nn.Conv2d(1, 32, 3)),
-            torch.nn.Flatten(2),
-            snn.LIFRecurrent(36, 32),
-            torch.nn.Flatten(1),
-            snn.LILinearCell(1024, 10))
+            torch.nn.Flatten(),
+            torch.nn.Linear(64, 32),
+            norse.torch.LIFRecurrentCell(32, 16),
+            torch.nn.Linear(16, 10))
         .to(device))
     optimizer = torch.optim.Adam(model.parameters(), lr = 2e-3)
 
