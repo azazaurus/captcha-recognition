@@ -1,3 +1,4 @@
+import random
 from typing import List, Tuple
 
 import norse
@@ -16,14 +17,13 @@ def train(
         device: torch._C.device,
         model: norse.torch.SequentialState,
         optimizer: torch.optim.Optimizer,
-        data_batches: List[Tensor],
-        target_batches: List[LongTensor]
+        data_target_batches: List[Tuple[Tensor, LongTensor]]
     ) -> List[float]:
     model.train()
     current_batch_index = 0
     losses: List[float] = []
 
-    for data, target in zip(data_batches, target_batches):
+    for data, target in data_target_batches:
         data: Tensor = data.to(device)
         target: LongTensor = target.to(device)
 
@@ -36,7 +36,7 @@ def train(
 
         current_batch_index += 1
         losses.append(loss.item())
-        print(f"loss: {loss.item():>7f} [{current_batch_index * 100 // len(data_batches)}%]")
+        print(f"loss: {loss.item():>7f} [{current_batch_index * 100 // len(data_target_batches)}%]")
         
     return losses
 
@@ -44,15 +44,14 @@ def train(
 def test(
         device: torch._C.device,
         model: norse.torch.SequentialState,
-        data_batches: List[Tensor],
-        target_batches: List[LongTensor]
+        data_target_batches: List[Tuple[Tensor, LongTensor]]
     ) -> Tuple[float, float]:
     model.eval()
 
     test_loss = 0
     correct = 0
     with torch.no_grad():
-        for data, target in zip(data_batches, target_batches):
+        for data, target in data_target_batches:
             data: Tensor = data.to(device)
             target: LongTensor = target.to(device)
 
@@ -65,7 +64,7 @@ def test(
             )  # get the index of the max log-probability
             correct += pred.eq(target.view_as(pred)).sum().item()
 
-    dataset_length = len(data_batches) * len(data_batches[0])
+    dataset_length = len(data_target_batches) * len(data_target_batches[0][0])
     test_loss /= dataset_length
     accuracy = 100.0 * correct / dataset_length
     print(f"Accuracy: {accuracy:>0.1f}%, test loss: {test_loss:>8f}")
@@ -73,25 +72,38 @@ def test(
     return test_loss, accuracy
 
 
-def data_to_tensors(data: ndarray, batch_size: int) -> List[Tensor]:
+def data_to_tensors(data: ndarray) -> List[Tensor]:
     data_transform = torchvision.transforms.Normalize((0.1307,), (0.3081,))
     return [data_transform(
             torch.from_numpy(
                 numpy
-                    .reshape(batch, (batch.shape[0], 1, 8, 8))
+                    .reshape(image, (1, 8, 8))
                     .astype(numpy.float32)))
-        for batch in split_into_batches(data, batch_size, True)]
+        for image in data]
 
 
-def target_to_tensors(target: ndarray, batch_size: int) -> List[LongTensor]:
-    return [torch.as_tensor(batch, dtype = torch.long)
-        for batch in split_into_batches(target, batch_size, True)]
+def to_data_target_pairs(data: ndarray, target: ndarray) -> List[Tuple[Tensor, int]]:
+    data_tensors = data_to_tensors(data)
+    return [(data_tensor, label) for data_tensor, label in zip(data_tensors, target)]
 
 
-def split_into_batches(array: ndarray, batch_size: int, drop_last_uneven: bool = False) -> List[ndarray]:
+def split_into_batches(
+        data_target_pairs: List[Tuple[Tensor, int]],
+        batch_size: int,
+        drop_last_uneven: bool = False
+    ) -> List[Tuple[Tensor, LongTensor]]:
     if drop_last_uneven:
-        array = array[:len(array) - len(array) % batch_size]
-    return numpy.split(array, numpy.arange(batch_size, len(array), batch_size))
+        data_target_pairs = data_target_pairs[:len(data_target_pairs) - len(data_target_pairs) % batch_size]
+
+    data, target = zip(*data_target_pairs)
+    numpy_data = numpy.stack([tensor.numpy() for tensor in data], axis = 0)
+    data_batches = numpy.split(numpy_data, numpy.arange(batch_size, len(numpy_data), batch_size))
+    target_batches = numpy.split(target, numpy.arange(batch_size, len(target), batch_size))
+
+    return list(
+        zip(
+            (torch.from_numpy(batch) for batch in data_batches),
+            (torch.as_tensor(batch, dtype = torch.long) for batch in target_batches)))
 
 
 def main(
@@ -106,10 +118,8 @@ def main(
         digits["data"],
         digits["target"],
         test_size = 0.143)
-    train_data: List[Tensor] = data_to_tensors(train_data, batch_size)
-    test_data: List[Tensor] = data_to_tensors(test_data, batch_size)
-    train_target: List[LongTensor] = target_to_tensors(train_target, batch_size)
-    test_target: List[LongTensor] = target_to_tensors(test_target, batch_size)
+    train_data_target_pairs: List[Tuple[Tensor, int]] = to_data_target_pairs(train_data, train_target)
+    test_data_target_pairs: List[Tuple[Tensor, int]] = to_data_target_pairs(test_data, test_target)
 
     model = (norse.torch.SequentialState(
             torch.nn.Flatten(),
@@ -120,9 +130,16 @@ def main(
     optimizer = torch.optim.Adam(model.parameters(), lr = 2e-3)
 
     max_accuracy = 0.0
+    random.seed()
     for epoch in range(epoch_count):
-        current_training_losses = train(device, model, optimizer, train_data, train_target)
-        test_loss, accuracy = test(device, model, test_data, test_target)
+        random.shuffle(train_data_target_pairs)
+        train_data_target_batches = split_into_batches(train_data_target_pairs, batch_size, True)
+
+        random.shuffle(test_data_target_pairs)
+        test_data_target_batches = split_into_batches(test_data_target_pairs, batch_size, True)
+
+        current_training_losses = train(device, model, optimizer, train_data_target_batches)
+        test_loss, accuracy = test(device, model, test_data_target_batches)
 
         if accuracy > max_accuracy:
             max_accuracy = accuracy
