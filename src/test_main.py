@@ -20,6 +20,7 @@ def train(
         target_batches: List[LongTensor]
     ) -> List[float]:
     model.train()
+    current_batch_index = 0
     losses: List[float] = []
 
     for data, target in zip(data_batches, target_batches):
@@ -32,8 +33,10 @@ def train(
         loss.backward()
     
         optimizer.step()
-    
+
+        current_batch_index += 1
         losses.append(loss.item())
+        print(f"loss: {loss.item():>7f} [{current_batch_index * 100 // len(data_batches)}%]")
         
     return losses
 
@@ -65,6 +68,8 @@ def test(
     dataset_length = len(data_batches) * len(data_batches[0])
     test_loss /= dataset_length
     accuracy = 100.0 * correct / dataset_length
+    print(f"Accuracy: {accuracy:>0.1f}%, test loss: {test_loss:>8f}")
+
     return test_loss, accuracy
 
 
@@ -118,12 +123,13 @@ def main(
     for epoch in range(epoch_count):
         current_training_losses = train(device, model, optimizer, train_data, train_target)
         test_loss, accuracy = test(device, model, test_data, test_target)
-        
+
         if accuracy > max_accuracy:
             max_accuracy = accuracy
         print(f"Epoch {epoch} is done")
-    
-    print(f"Max accuracy: {max_accuracy}%")
+        print()
+
+    print(f"Max accuracy: {max_accuracy:>0.1f}%")
 
 
 if __name__ == '__main__':
