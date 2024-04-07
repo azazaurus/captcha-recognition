@@ -21,6 +21,8 @@ def train(
     ) -> List[float]:
     model.train()
     current_batch_index = 0
+    report_batch_count = (len(data_target_batches) + 10 - 1) // 10
+    report_batch_index = len(data_target_batches) % report_batch_count
     losses: List[float] = []
 
     for data, target in data_target_batches:
@@ -36,7 +38,10 @@ def train(
 
         current_batch_index += 1
         losses.append(loss.item())
-        print(f"loss: {loss.item():>7f} [{current_batch_index * 100 // len(data_target_batches)}%]")
+        
+        if current_batch_index % report_batch_count == report_batch_index:
+            current_progress_percent = current_batch_index * 100 // len(data_target_batches)
+            print(f"loss: {loss.item():>7f} [{current_progress_percent}%]")
         
     return losses
 
