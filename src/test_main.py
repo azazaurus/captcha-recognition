@@ -96,7 +96,7 @@ def split_into_batches(array: ndarray, batch_size: int, drop_last_uneven: bool =
 
 def main(
         device_type: str = "cpu",
-        epoch_count: int = 10,
+        epoch_count: int = 100,
         batch_size: int = 32
     ) -> None:
     device: torch._C.device = torch.device(device_type)
@@ -113,9 +113,9 @@ def main(
 
     model = (norse.torch.SequentialState(
             torch.nn.Flatten(),
-            torch.nn.Linear(64, 32),
-            norse.torch.LIFRecurrentCell(32, 16),
-            torch.nn.Linear(16, 10))
+            norse.torch.LIFRecurrentCell(64, 16),
+            torch.nn.Linear(16, 10),
+            torch.nn.LogSoftmax(dim = 1))
         .to(device))
     optimizer = torch.optim.Adam(model.parameters(), lr = 2e-3)
 
