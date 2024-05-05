@@ -1,4 +1,5 @@
 import string
+import time
 from typing import Dict, List, Optional, Tuple, Union
 
 import norse
@@ -127,7 +128,10 @@ def train(
 	report_batch_index = (len(data_loader) - 1) % batches_per_report_count
 	losses: List[float] = []
 
+	batch_processing_time_sum = 0
 	for current_batch_index, (data, target_indices) in enumerate(data_loader):
+		batch_start_time = time.perf_counter_ns()
+
 		data: Tensor = data.to(device)
 		target, target_length = to_target(targets, target_indices)
 
@@ -147,9 +151,20 @@ def train(
 
 		losses.append(loss.item())
 
+		batch_processing_time_sum += time.perf_counter_ns() - batch_start_time
 		if current_batch_index % batches_per_report_count == report_batch_index:
-			current_progress_percent = (current_batch_index + 1) * 100 // len(data_loader)
-			print(f"loss: {loss.item():.7f} [{current_progress_percent}%]", flush = True)
+			processed_batches_count = current_batch_index + 1
+			current_progress_percent = processed_batches_count * 100 // len(data_loader)
+			print(
+				f"Loss: {loss.item():.7f} [{current_progress_percent}%, "
+				f"{batch_processing_time_sum / 1e9:.1f} s elapsed]",
+				flush = True)
+
+			if current_batch_index < batches_per_report_count:
+				average_batch_processing_time = batch_processing_time_sum / processed_batches_count / 1e6
+				print(f"Average batch processing time: {average_batch_processing_time:.1f} ms", flush = True)
+
+	print(f"Average batch processing time: {batch_processing_time_sum / len(data_loader) / 1e6:.1f} ms")
 
 	return losses
 
@@ -166,6 +181,7 @@ def test(
 
 	loss_sum = 0.0
 	correct_predictions_count = 0
+	ctc_decoding_time_sum = 0
 	with torch.no_grad():
 		for data, target_indices in data_loader:
 			data: Tensor = data.to(device)
@@ -185,15 +201,18 @@ def test(
 
 			batch_probabilities = torch.nn.functional.softmax(voltages, dim = 2)
 			for probabilities, target_index in zip(batch_probabilities, target_indices):
+				ctc_start_time = time.perf_counter_ns()
 				output, path = beam_search(
 					probabilities.numpy(),
 					CaptchaRecognizer.captcha_alphabet,
 					12)
+				ctc_decoding_time_sum += time.perf_counter_ns() - ctc_start_time
 				if output == labels[target_index]:
 					correct_predictions_count += 1
 
 	average_loss = loss_sum / len(data_loader)
 	accuracy = 100 * correct_predictions_count / len(data_loader.dataset)
+	print(f"Average CTC decoding time: {ctc_decoding_time_sum // len(data_loader.dataset) / 1e6:.1f} ms")
 	print(f"Accuracy: {accuracy:.2f}%, test loss: {average_loss:.7f}")
 
 	return average_loss, accuracy
@@ -256,6 +275,7 @@ def main(
 
 	max_accuracy = 0.0
 	for epoch in range(epoch_count):
+		epoch_start_time = time.perf_counter_ns()
 		current_training_losses = train(
 			device,
 			model,
@@ -265,10 +285,11 @@ def main(
 			train_targets,
 			reports_count_per_epoch)
 		test_loss, accuracy = test(device, model, ctc_loss_calculator, test_loader, test_targets, test_labels)
+		epoch_end_time = time.perf_counter_ns()
 
 		if accuracy > max_accuracy:
 			max_accuracy = accuracy
-		print(f"Epoch {epoch} is done", flush = True)
+		print(f"Epoch {epoch} is done in {(epoch_end_time - epoch_start_time) / 1e9:.1f} s", flush = True)
 		print()
 
 	print(f"Max accuracy: {max_accuracy:.2f}%", flush = True)
