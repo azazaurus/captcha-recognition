@@ -1,6 +1,7 @@
+import os
 import string
 import time
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, TextIO, Tuple, Union
 
 import norse
 import norse.torch as snn
@@ -174,7 +175,8 @@ def test(
 		ctc_loss_calculator: torch.nn.CTCLoss,
 		data_loader: torch.utils.data.DataLoader,
 		targets: List[LongTensor],
-		labels: List[str]
+		labels: List[str],
+		test_results_file: TextIO
 	) -> Tuple[float, float]:
 	model.eval()
 
@@ -206,8 +208,13 @@ def test(
 					ConvolutionalNetwork.captcha_alphabet,
 					12)
 				ctc_decoding_time_sum += time.perf_counter_ns() - ctc_start_time
-				if output == labels[target_index]:
+
+				target_label = labels[target_index]
+				is_correct_prediction = output == target_label
+				if is_correct_prediction:
 					correct_predictions_count += 1
+
+				test_results_file.write(f"{target_label},{output},{1 if is_correct_prediction else 0}\n")
 
 	average_loss = loss_sum / len(data_loader)
 	accuracy = 100 * correct_predictions_count / len(data_loader.dataset)
@@ -262,6 +269,7 @@ def main(
 		[1 - test_dataset_fraction, test_dataset_fraction])
 	train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = batch_size, shuffle = True)
 	test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = batch_size)
+	os.makedirs("test-results", exist_ok = True)
 
 	model = ConvolutionalNetwork(image_timesteps_count, 3, 64, 32).to(device)
 	ctc_loss_calculator = torch.nn.CTCLoss()
@@ -283,7 +291,16 @@ def main(
 			train_loader,
 			train_targets,
 			reports_count_per_epoch)
-		test_loss, accuracy = test(device, model, ctc_loss_calculator, test_loader, test_targets, test_labels)
+		with open(f"test-results/epoch-{epoch}.csv", mode = "wt") as test_results_file:
+			test_results_file.write("\"Target\",\"Prediction\",\"Is correct\"\n")
+			test_loss, accuracy = test(
+				device,
+				model,
+				ctc_loss_calculator,
+				test_loader,
+				test_targets,
+				test_labels,
+				test_results_file)
 		epoch_end_time = time.perf_counter_ns()
 
 		if accuracy > max_accuracy:
