@@ -36,24 +36,24 @@ class ConvolutionalMaxPooling(torch.nn.Sequential):
 
 
 class FeatureExtractor(torch.nn.Sequential):
-	def __init__(self, input_channels_count: int = 1, output_channels_count: int = 64) -> None:
+	def __init__(self, input_channels_count: int = 1, output_channels_count: int = 32) -> None:
 		super(FeatureExtractor, self).__init__(
 			ConvolutionalMaxPooling(input_channels_count, 6, 3, 1),
 			ConvolutionalMaxPooling(6, 12, 3, 1, 0, False),
-			ConvolutionalMaxPooling(12, 16, 5, 1),
-			ConvolutionalMaxPooling(16, 32, 3, 1, 0, False),
-			ConvolutionalMaxPooling(32, output_channels_count, 3, 1))
+			ConvolutionalMaxPooling(12, 16, 5, 1, 0, False),
+			ConvolutionalMaxPooling(16, 24, 3, 1, 0, False),
+			ConvolutionalMaxPooling(24, output_channels_count, 3, 1))
 
 		self.input_channels_count = input_channels_count
 		self.output_channels_count = output_channels_count
 
 	@staticmethod
 	def calculate_output_feature_map_width(image_width: int) -> int:
-		return (((image_width - 2) // 2 - 2 - 4) // 2 - 2 - 2) // 2
+		return ((image_width - 2) // 2 - 2 - 4 - 2 - 2) // 2
 
 	@staticmethod
 	def calculate_output_feature_map_height(image_height: int) -> int:
-		return (((image_height - 2) // 2 - 2 - 4) // 2 - 2 - 2) // 2
+		return ((image_height - 2) // 2 - 2 - 4 - 2 - 2) // 2
 
 	@staticmethod
 	def calculate_output_features_count(image_width: int, image_height: int) -> int:
@@ -253,6 +253,7 @@ def main(
 	device: torch.device = torch.device(device_type)
 
 	image_transform = torchvision.transforms.Compose([
+		torchvision.transforms.Resize((32, 64)),
 		torchvision.transforms.ToTensor(),
 		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
 	dataset = torchvision.datasets.ImageFolder("fixed-length/", transform = image_transform)
@@ -262,7 +263,7 @@ def main(
 	train_loader = torch.utils.data.DataLoader(train_dataset, batch_size = batch_size, shuffle = True)
 	test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = batch_size)
 
-	model = ConvolutionalNetwork(image_timesteps_count, 3, 128, 64).to(device)
+	model = ConvolutionalNetwork(image_timesteps_count, 3, 64, 32).to(device)
 	ctc_loss_calculator = torch.nn.CTCLoss()
 	optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
 
