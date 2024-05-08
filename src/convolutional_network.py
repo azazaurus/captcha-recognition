@@ -114,6 +114,14 @@ class ConvolutionalNetwork(torch.nn.Module):
 		return voltages, voltages_length
 
 
+class ModelDto:
+	def __init__(self, epoch: int, model_state: dict, optimizer_state: dict, accuracy: float):
+		self.epoch = epoch
+		self.model_state = model_state
+		self.optimizer_state = optimizer_state
+		self.accuracy = accuracy
+
+
 def train(
 		device: torch.device,
 		model: torch.nn.Module,
@@ -241,6 +249,27 @@ def to_target(targets: List[LongTensor], target_indices: LongTensor) -> Tuple[Lo
 	return torch.stack(target), torch.as_tensor(target_length, dtype = torch.long)
 
 
+def load(
+		file_path: str,
+		model: torch.nn.Module,
+		optimizer: torch.optim.Optimizer
+	) -> Tuple[int, float]:
+	dto: ModelDto = torch.load(file_path)
+	model.load_state_dict(dto.model_state)
+	optimizer.load_state_dict(dto.optimizer_state)
+	return dto.epoch, dto.accuracy
+
+
+def save(
+		file_path: str,
+		epoch: int,
+		model: torch.nn.Module,
+		optimizer: torch.optim.Optimizer,
+		accuracy: float
+	) -> None:
+	torch.save(ModelDto(epoch, model.state_dict(), optimizer.state_dict(), accuracy), file_path)
+
+
 def main(
 		device_type: str = "cpu",
 		epoch_count: int = 50,
@@ -249,6 +278,8 @@ def main(
 		learning_rate: float = 2e-4,
 		image_timesteps_count: int = 100,
 		reports_count_per_epoch: int = 10,
+		input_model_file_name: Optional[str] = None,
+		output_model_file_name: Optional[str] = "model-{0}.pt",
 		random_seed: Optional[int] = 1234
 	) -> None:
 	if random_seed is not None:
@@ -272,17 +303,24 @@ def main(
 	test_loader = torch.utils.data.DataLoader(test_dataset, batch_size, **loader_parameters)
 	os.makedirs("test-results", exist_ok = True)
 
+	loaded_epoch = -1
+	loaded_accuracy = 0.0
 	model = ConvolutionalNetwork(image_timesteps_count, 3, 64, 32).to(device)
 	ctc_loss_calculator = torch.nn.CTCLoss()
 	optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
+
+	if input_model_file_name is not None:
+		loaded_epoch, loaded_accuracy = load("models/" + input_model_file_name, model, optimizer)
+	if output_model_file_name is not None:
+		os.makedirs("models", exist_ok = True)
 
 	captcha_alphabet_map = {x[1]: x[0] for x in enumerate(ConvolutionalNetwork.captcha_alphabet)}
 	train_targets = to_targets(train_dataset.dataset.class_to_idx, captcha_alphabet_map)
 	test_targets = to_targets(test_dataset.dataset.class_to_idx, captcha_alphabet_map)
 	test_labels = list(x[0] for x in sorted(test_dataset.dataset.class_to_idx.items(), key = lambda x: x[1]))
 
-	max_accuracy = 0.0
-	for epoch in range(epoch_count):
+	max_accuracy = loaded_accuracy
+	for epoch in range(loaded_epoch + 1, epoch_count):
 		epoch_start_time = time.perf_counter_ns()
 		current_training_losses = train(
 			device,
@@ -304,8 +342,10 @@ def main(
 				test_results_file)
 		epoch_end_time = time.perf_counter_ns()
 
-		if accuracy > max_accuracy:
+		if accuracy >= max_accuracy:
 			max_accuracy = accuracy
+			if output_model_file_name is not None:
+				save("models/" + output_model_file_name.format(epoch), epoch, model, optimizer, accuracy)
 		print(f"Epoch {epoch} is done in {(epoch_end_time - epoch_start_time) / 1e9:.1f} s")
 		print()
 
