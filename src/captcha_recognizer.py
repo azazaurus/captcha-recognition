@@ -115,12 +115,41 @@ class CaptchaRecognizer(torch.nn.Module):
 
 
 class ModelDto:
-	def __init__(self, epoch: int, model_state: dict, optimizer_state: dict, accuracy: float, max_accuracy: float):
+	def __init__(
+			self,
+			epoch: int,
+			epochs_without_progress_in_row: int,
+			model_state: dict,
+			optimizer_state: dict,
+			accuracy: float,
+			max_accuracy: float,
+			best_test_loss: float):
 		self.epoch = epoch
+		self.epochs_without_progress_in_row = epochs_without_progress_in_row
 		self.model_state = model_state
 		self.optimizer_state = optimizer_state
 		self.accuracy = accuracy
 		self.max_accuracy = max_accuracy
+		self.best_test_loss = best_test_loss
+
+
+class ModelParameters:
+	def __init__(
+			self,
+			epoch: int,
+			epochs_without_progress_in_row: int,
+			model: torch.nn.Module,
+			optimizer: torch.optim.Optimizer,
+			accuracy: float,
+			max_accuracy: float,
+			best_test_loss: float):
+		self.epoch = epoch
+		self.epochs_without_progress_in_row = epochs_without_progress_in_row
+		self.model = model
+		self.optimizer = optimizer
+		self.accuracy = accuracy
+		self.max_accuracy = max_accuracy
+		self.best_test_loss = best_test_loss
 
 
 def train(
@@ -255,27 +284,37 @@ def load(
 		file_path: str,
 		model: torch.nn.Module,
 		optimizer: torch.optim.Optimizer
-	) -> Tuple[int, float]:
+	) -> ModelParameters:
 	dto: ModelDto = torch.load(file_path)
+
 	model.load_state_dict(dto.model_state)
 	optimizer.load_state_dict(dto.optimizer_state)
-	return dto.epoch, dto.max_accuracy
+	return ModelParameters(
+		dto.epoch,
+		dto.epochs_without_progress_in_row,
+		model,
+		optimizer,
+		dto.accuracy,
+		dto.max_accuracy,
+		dto.best_test_loss)
 
 
-def save(
-		file_path: str,
-		epoch: int,
-		model: torch.nn.Module,
-		optimizer: torch.optim.Optimizer,
-		accuracy: float,
-		max_accuracy: float
-	) -> None:
-	torch.save(ModelDto(epoch, model.state_dict(), optimizer.state_dict(), accuracy, max_accuracy), file_path)
+def save(file_path: str, parameters: ModelParameters) -> None:
+	dto = ModelDto(
+		parameters.epoch,
+		parameters.epochs_without_progress_in_row,
+		parameters.model.state_dict(),
+		parameters.optimizer.state_dict(),
+		parameters.accuracy,
+		parameters.max_accuracy,
+		parameters.best_test_loss)
+	torch.save(dto, file_path)
 
 
 def main(
 		device_type: str = "cpu",
-		epoch_count: int = 50,
+		max_epoch_count: Optional[int] = None,
+		early_stopping_epoch_count: Optional[int] = 10,
 		batch_size: int = 32,
 		test_dataset_fraction: float = 0.3,
 		learning_rate: float = 2e-4,
@@ -306,24 +345,32 @@ def main(
 	test_loader = torch.utils.data.DataLoader(test_dataset, batch_size, **loader_parameters)
 	os.makedirs("test-results", exist_ok = True)
 
-	loaded_epoch = -1
-	loaded_max_accuracy = 0.0
 	model = CaptchaRecognizer(image_timesteps_count, 3, 64, 32).to(device)
 	ctc_loss_calculator = torch.nn.CTCLoss()
 	optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
-
-	if input_model_file_name is not None:
-		loaded_epoch, loaded_max_accuracy = load("models/" + input_model_file_name, model, optimizer)
-	if output_model_file_name is not None:
-		os.makedirs("models", exist_ok = True)
 
 	captcha_alphabet_map = {x[1]: x[0] for x in enumerate(CaptchaRecognizer.captcha_alphabet)}
 	train_targets = to_targets(train_dataset.dataset.class_to_idx, captcha_alphabet_map)
 	test_targets = to_targets(test_dataset.dataset.class_to_idx, captcha_alphabet_map)
 	test_labels = list(x[0] for x in sorted(test_dataset.dataset.class_to_idx.items(), key = lambda x: x[1]))
 
-	max_accuracy = loaded_max_accuracy
-	for epoch in range(loaded_epoch + 1, epoch_count):
+	loaded_model_parameters: Optional[ModelParameters] = None
+	if input_model_file_name is not None:
+		loaded_model_parameters = load("models/" + input_model_file_name, model, optimizer)
+	if output_model_file_name is not None:
+		os.makedirs("models", exist_ok = True)
+
+	best_test_loss: Optional[float] = None
+	max_accuracy = 0.
+	epoch = 0
+	epochs_without_progress_in_row = 0
+	if loaded_model_parameters is not None:
+		best_test_loss = loaded_model_parameters.best_test_loss
+		max_accuracy = loaded_model_parameters.max_accuracy
+		epoch = loaded_model_parameters.epoch + 1
+		epochs_without_progress_in_row = loaded_model_parameters.epochs_without_progress_in_row
+	while ((max_epoch_count is None or epoch < max_epoch_count)
+			and (early_stopping_epoch_count is None or epochs_without_progress_in_row < early_stopping_epoch_count)):
 		epoch_start_time = time.perf_counter_ns()
 		current_training_losses = train(
 			device,
@@ -345,11 +392,28 @@ def main(
 				test_results_file)
 		epoch_end_time = time.perf_counter_ns()
 
+		if best_test_loss is None or test_loss < best_test_loss:
+			best_test_loss = test_loss
+			epochs_without_progress_in_row = 0
+		else:
+			epochs_without_progress_in_row += 1
+
 		max_accuracy = max(accuracy, max_accuracy)
 		if output_model_file_name is not None:
-			save("models/" + output_model_file_name.format(epoch), epoch, model, optimizer, accuracy, max_accuracy)
+			save(
+				"models/" + output_model_file_name.format(epoch),
+				ModelParameters(
+					epoch,
+					epochs_without_progress_in_row,
+					model,
+					optimizer,
+					accuracy,
+					max_accuracy,
+					best_test_loss))
 		print(f"Epoch {epoch} is done in {(epoch_end_time - epoch_start_time) / 1e9:.1f} s", flush = True)
 		print()
+
+		epoch += 1
 
 	print(f"Max accuracy: {max_accuracy:.2f}%", flush = True)
 
