@@ -76,6 +76,7 @@ class ConvolutionalNetwork(torch.nn.Module):
 		self.feature_extractor = FeatureExtractor(channels_count)
 		self.feature_map_width = FeatureExtractor.calculate_output_feature_map_width(image_width)
 
+		self.dropout = torch.nn.Dropout(0.15)
 		self.lsnn0 = snn.LSNNRecurrentCell(
 			self.feature_extractor.output_channels_count * FeatureExtractor.calculate_output_feature_map_height(image_height),
 			256)
@@ -88,6 +89,7 @@ class ConvolutionalNetwork(torch.nn.Module):
 			images_batch.view(-1, self.input_features_count))
 		# Unflatten the images
 		input_spikes = input_spikes.reshape(self.timesteps_count, *images_batch.shape)
+		input_spikes = self.dropout(input_spikes)
 
 		batch_states0: List[Optional[norse.torch.LSNNState]] = [None] * images_batch.shape[0]
 		batch_states1: List[Optional[norse.torch.LSNNState]] = [None] * images_batch.shape[0]
