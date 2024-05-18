@@ -12,6 +12,12 @@ import torchvision
 from fast_ctc_decode import beam_search
 from torch import LongTensor, Tensor
 
+black_color_threshold = 100 + 1
+white_color_threshold = 200
+color_map_with_no_black_and_white_shades = ([0] * black_color_threshold
+	+ list(range(black_color_threshold, white_color_threshold))
+	+ [255] * (256 - white_color_threshold))
+
 
 class ConvolutionalMaxPooling(torch.nn.Sequential):
 	def __init__(
@@ -329,7 +335,8 @@ def main(
 
 	image_transform = torchvision.transforms.Compose([
 		torchvision.transforms.Grayscale(),
-		torchvision.transforms.Lambda(lambda x: torchvision.transforms.functional.invert(x)),
+		torchvision.transforms.Lambda(lambda image: image.point(color_map_with_no_black_and_white_shades)),
+		torchvision.transforms.Lambda(lambda image: torchvision.transforms.functional.invert(image)),
 		torchvision.transforms.Resize((28, 28)),
 		torchvision.transforms.ToTensor(),
 		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
