@@ -329,6 +329,7 @@ def main(
 
 	image_transform = torchvision.transforms.Compose([
 		torchvision.transforms.Grayscale(),
+		torchvision.transforms.Lambda(lambda x: torchvision.transforms.functional.invert(x)),
 		torchvision.transforms.Resize((28, 28)),
 		torchvision.transforms.ToTensor(),
 		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
