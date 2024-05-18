@@ -328,6 +328,7 @@ def main(
 	device: torch.device = torch.device(device_type)
 
 	image_transform = torchvision.transforms.Compose([
+		torchvision.transforms.Grayscale(),
 		torchvision.transforms.Resize((28, 28)),
 		torchvision.transforms.ToTensor(),
 		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
@@ -339,7 +340,7 @@ def main(
 	test_loader = torch.utils.data.DataLoader(test_dataset, batch_size = batch_size)
 	os.makedirs("test-results", exist_ok = True)
 
-	model = ConvolutionalNetwork(image_timesteps_count, 3, 28, 28).to(device)
+	model = ConvolutionalNetwork(image_timesteps_count, 1, 28, 28).to(device)
 	ctc_loss_calculator = torch.nn.CTCLoss()
 	optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
 
