@@ -43,13 +43,13 @@ class ConvolutionalMaxPooling(torch.nn.Sequential):
 
 
 class FeatureExtractor(torch.nn.Sequential):
-	def __init__(self, input_channels_count: int = 1, output_channels_count: int = 32) -> None:
+	def __init__(self, input_channels_count: int = 1, output_channels_count: int = 128) -> None:
 		super(FeatureExtractor, self).__init__(
-			ConvolutionalMaxPooling(input_channels_count, 4, 3, 1, 0, False),
-			ConvolutionalMaxPooling(4, 8, 3, 1, 0, False),
-			ConvolutionalMaxPooling(8, 16, 5, 1),
-			ConvolutionalMaxPooling(16, 24, 3, 1, 0, False),
-			ConvolutionalMaxPooling(24, output_channels_count, 3, 1, 0, False))
+			ConvolutionalMaxPooling(input_channels_count, 8, 3, 1, 0, False),
+			ConvolutionalMaxPooling(8, 16, 3, 1, 0, False),
+			ConvolutionalMaxPooling(16, 32, 5, 1),
+			ConvolutionalMaxPooling(32, 64, 3, 1, 0, False),
+			ConvolutionalMaxPooling(64, output_channels_count, 3, 1, 0, False))
 
 		self.input_channels_count = input_channels_count
 		self.output_channels_count = output_channels_count
@@ -82,12 +82,13 @@ class ConvolutionalNetwork(torch.nn.Module):
 		self.feature_extractor = FeatureExtractor(channels_count)
 		self.feature_map_width = FeatureExtractor.calculate_output_feature_map_width(image_width)
 
-		self.dropout = torch.nn.Dropout(0.15)
-		self.lsnn0 = snn.LSNNRecurrentCell(
-			self.feature_extractor.output_channels_count * FeatureExtractor.calculate_output_feature_map_height(image_height),
-			256)
-		self.lsnn1 = snn.LSNNRecurrentCell(256, 128)
-		self.out = snn.LILinearCell(128, len(self.captcha_alphabet))
+		self.dropout = torch.nn.Dropout(0.1)
+		self.lsnn0 = snn.LSNNCell()
+		self.lsnn1 = snn.LSNNCell()
+		self.out = snn.LILinearCell(
+			self.feature_extractor.output_channels_count
+				* FeatureExtractor.calculate_output_feature_map_height(image_height),
+			len(self.captcha_alphabet))
 
 	def forward(self, images_batch: Tensor) -> Tensor:
 		input_spikes = self.constant_current_encoder(
@@ -318,9 +319,9 @@ def main(
 		early_stopping_epoch_count: Optional[int] = 4,
 		batch_size: int = 32,
 		test_dataset_fraction = 10000 / 70000,
-		learning_rate: float = 2e-4,
-		image_timesteps_count: int = 150,
-		reports_count_per_epoch: int = 10,
+		learning_rate: float = 3e-4,
+		image_timesteps_count: int = 200,
+		reports_count_per_epoch: int = 2000,
 		input_model_file_name: Optional[str] = None,
 		output_model_file_name: Optional[str] = "model-{0}.pt",
 		random_seed: Optional[int] = 1234
