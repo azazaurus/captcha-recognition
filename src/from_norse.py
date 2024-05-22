@@ -19,13 +19,11 @@ class LIFConvNet(torch.nn.Module):
 		seq_length,
 		input_scale,
 		model="super",
-		only_first_spike=False,
 	):
 		super(LIFConvNet, self).__init__()
 		self.constant_current_encoder = ConstantCurrentLIFEncoder(seq_length=seq_length)
-		self.only_first_spike = only_first_spike
 		self.input_features = input_features
-		self.rsnn = ConvNet4(method=model)
+		self.rsnn = ConvNet4(3, method=model)
 		self.seq_length = seq_length
 		self.input_scale = input_scale
 
@@ -34,18 +32,8 @@ class LIFConvNet(torch.nn.Module):
 		x = self.constant_current_encoder(
 			x.view(-1, self.input_features) * self.input_scale
 		)
-		if self.only_first_spike:
-			# delete all spikes except for first
-			zeros = torch.zeros_like(x.cpu()).detach().numpy()
-			idxs = x.cpu().nonzero().detach().numpy()
-			spike_counter = np.zeros((batch_size, 28 * 28))
-			for t, batch, nrn in idxs:
-				if spike_counter[batch, nrn] == 0:
-					zeros[t, batch, nrn] = 1
-					spike_counter[batch, nrn] += 1
-			x = torch.from_numpy(zeros).to(x.device)
 
-		x = x.reshape(self.seq_length, batch_size, 1, 28, 28)
+		x = x.reshape(self.seq_length, batch_size, 3, 28, 28)
 		voltages = self.rsnn(x)
 		m, _ = torch.max(voltages, 0)
 		log_p_y = torch.nn.functional.log_softmax(m, dim=1)
@@ -174,46 +162,28 @@ def main(args: Any) -> None:
 
 	device = torch.device(args.device)
 
+	image_transform = torchvision.transforms.Compose([
+		torchvision.transforms.Resize((28, 28)),
+		torchvision.transforms.ToTensor(),
+		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
 	kwargs = {"num_workers": 1, "pin_memory": True} if args.device == "cuda" else {}
 	train_loader = torch.utils.data.DataLoader(
-		torchvision.datasets.MNIST(
-			root = ".",
-			train = True,
-			download = True,
-			transform = torchvision.transforms.Compose(
-				[
-					torchvision.transforms.ToTensor(),
-					torchvision.transforms.Normalize((0.1307,), (0.3081,)),
-				]
-			),
-		),
-		batch_size = args.batch_size,
-		shuffle = True,
-		**kwargs,
-	)
+		torchvision.datasets.SVHN("SVHN", "train", image_transform, download = True),
+		args.batch_size,
+		True,
+		**kwargs)
 	test_loader = torch.utils.data.DataLoader(
-		torchvision.datasets.MNIST(
-			root = ".",
-			train = False,
-			transform = torchvision.transforms.Compose(
-				[
-					torchvision.transforms.ToTensor(),
-					torchvision.transforms.Normalize((0.1307,), (0.3081,)),
-				]
-			),
-		),
-		batch_size = args.batch_size,
-		**kwargs,
-	)
+		torchvision.datasets.SVHN("SVHN", "test", image_transform, download = True),
+		args.batch_size,
+		**kwargs)
 
-	input_features = 28 * 28
+	input_features = 3 * 28 * 28
 
 	model = LIFConvNet(
 		input_features,
 		args.seq_length,
 		input_scale = args.input_scale,
 		model = args.method,
-		only_first_spike = args.only_first_spike,
 	).to(device)
 
 	if args.optimizer == "sgd":
@@ -279,7 +249,6 @@ def main(args: Any) -> None:
 
 if __name__ == "__main__":
 	args = SimpleNamespace()
-	args.only_first_spike = False
 	args.save_grads = False
 	args.grad_save_interval = 10
 	args.refrac = False
