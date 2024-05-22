@@ -2,7 +2,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
-import matplotlib.pyplot as plt
 
 import torch
 import torch.utils.data
@@ -63,9 +62,6 @@ def train(
 	grad_clip_value,
 	epochs,
 	log_interval,
-	do_plot,
-	plot_interval,
-	seq_length,
 	writer,
 ):
 	model.train()
@@ -112,21 +108,6 @@ def train(
 					writer.add_histogram(
 						tag + "/grad", value.grad.data.cpu().numpy(), step
 					)
-
-		if do_plot and batch_idx % plot_interval == 0:
-			ts = np.arange(0, seq_length)
-			fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=True)
-			axs = axs.reshape(-1)  # flatten
-			for nrn in range(10):
-				one_trace = model.voltages.detach().cpu().numpy()[:, 0, nrn]
-				fig.sca(axs[nrn])
-				fig.plot(ts, one_trace)
-			fig.xlabel("Time [s]")
-			fig.ylabel("Membrane Potential")
-
-			writer.add_figure("Voltages/output", fig, step)
-
-		losses.append(loss.item())
 
 	mean_loss = np.mean(losses)
 	return losses, mean_loss
@@ -259,9 +240,6 @@ def main(args: Any) -> None:
 			grad_clip_value = args.grad_clip_value,
 			epochs = args.epochs,
 			log_interval = args.log_interval,
-			do_plot = args.do_plot,
-			plot_interval = args.plot_interval,
-			seq_length = args.seq_length,
 			writer = writer,
 		)
 		test_loss, accuracy = test(
@@ -305,7 +283,6 @@ if __name__ == "__main__":
 	args.save_grads = False
 	args.grad_save_interval = 10
 	args.refrac = False
-	args.plot_interval = 10
 	args.input_scale = 1.0
 	args.find_learning_rate = False
 	args.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -323,7 +300,6 @@ if __name__ == "__main__":
 	args.save_model = True
 	args.big_net = False
 	args.only_output = False
-	args.do_plot = False
 	args.random_seed = 1234
 
 	main(args)

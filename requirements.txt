@@ -4,4 +4,3 @@ torchaudio==2.2.1
 torchvision==0.17.1
 tensorboard==2.14.0
 norse==1.1.0
-matplotlib==3.5.3
