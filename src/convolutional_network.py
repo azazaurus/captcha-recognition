@@ -82,12 +82,21 @@ class ConvolutionalNetwork(torch.nn.Module):
 		self.feature_extractor = FeatureExtractor(channels_count)
 		self.feature_map_width = FeatureExtractor.calculate_output_feature_map_width(image_width)
 
-		self.dropout = torch.nn.Dropout(0.15)
-		self.lsnn0 = snn.LSNNRecurrentCell(
-			self.feature_extractor.output_channels_count * FeatureExtractor.calculate_output_feature_map_height(image_height),
-			256)
-		self.lsnn1 = snn.LSNNRecurrentCell(256, 128)
-		self.out = snn.LILinearCell(128, len(self.captcha_alphabet))
+		self.conv1 = torch.nn.Conv2d(channels_count, 32, 5, 1)
+		self.conv2 = torch.nn.Conv2d(32, 64, 5, 1)
+		self.fc1 = torch.nn.Linear(self.features * self.features * 64, 1024)
+		self.lif0 = snn.LIFCell(
+			snn.LIFParameters(
+				method = "super",
+				alpha = torch.tensor(100.0),
+				v_th = torch.as_tensor(0.7)))
+		self.lif1 = LIFCell(
+			p = LIFParameters(
+				method = method, alpha = torch.tensor(100.0), v_th = torch.as_tensor(0.7)
+			),
+		)
+		self.lif2 = LIFCell(p = LIFParameters(method = method, alpha = torch.tensor(100.0)))
+		self.out = LILinearCell(1024, 10)
 
 	def forward(self, images_batch: Tensor) -> Tensor:
 		input_spikes = self.constant_current_encoder(
