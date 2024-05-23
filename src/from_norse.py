@@ -23,7 +23,7 @@ class LIFConvNet(torch.nn.Module):
 		super(LIFConvNet, self).__init__()
 		self.constant_current_encoder = ConstantCurrentLIFEncoder(seq_length=seq_length)
 		self.input_features = input_features
-		self.rsnn = ConvNet4(3, method=model)
+		self.rsnn = ConvNet4(method=model)
 		self.seq_length = seq_length
 		self.input_scale = input_scale
 
@@ -33,7 +33,7 @@ class LIFConvNet(torch.nn.Module):
 			x.view(-1, self.input_features) * self.input_scale
 		)
 
-		x = x.reshape(self.seq_length, batch_size, 3, 28, 28)
+		x = x.reshape(self.seq_length, batch_size, 1, 28, 28)
 		voltages = self.rsnn(x)
 		m, _ = torch.max(voltages, 0)
 		log_p_y = torch.nn.functional.log_softmax(m, dim=1)
@@ -163,6 +163,7 @@ def main(args: Any) -> None:
 	device = torch.device(args.device)
 
 	image_transform = torchvision.transforms.Compose([
+		torchvision.transforms.Grayscale(),
 		torchvision.transforms.Resize((28, 28)),
 		torchvision.transforms.ToTensor(),
 		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
@@ -177,7 +178,7 @@ def main(args: Any) -> None:
 		args.batch_size,
 		**kwargs)
 
-	input_features = 3 * 28 * 28
+	input_features = 28 * 28
 
 	model = LIFConvNet(
 		input_features,
