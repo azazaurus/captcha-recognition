@@ -1,4 +1,3 @@
-fast-ctc-decode==0.3.2
 numpy==1.24.1
 tensorboard==2.14.0
 torch==2.2.1
