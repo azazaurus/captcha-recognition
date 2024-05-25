@@ -230,7 +230,8 @@ def main(
 		max_epoch_count: Optional[int] = None,
 		early_stopping_epoch_count: Optional[int] = 4,
 		batch_size: int = 8,
-		learning_rate: float = 1e-3,
+		starting_learning_rate: float = 1e-2,
+		normal_learning_rate: float = 1e-3,
 		image_timesteps_count: int = 150,
 		reports_count_per_epoch: int = 1000,
 		input_model_file_name: Optional[str] = None,
@@ -254,7 +255,8 @@ def main(
 	os.makedirs("test-results", exist_ok = True)
 
 	model = ConvolutionalNetwork(image_timesteps_count, 3, 32, 32).to(device)
-	optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
+	optimizer = torch.optim.Adam(model.parameters(), lr = starting_learning_rate)
+	is_learning_rate_normal = False
 
 	loaded_model_parameters: Optional[ModelParameters] = None
 	if input_model_file_name is not None:
@@ -273,6 +275,10 @@ def main(
 		epochs_without_progress_in_row = loaded_model_parameters.epochs_without_progress_in_row
 	while ((max_epoch_count is None or epoch < max_epoch_count)
 			and (early_stopping_epoch_count is None or epochs_without_progress_in_row < early_stopping_epoch_count)):
+		if epoch >= 30 and not is_learning_rate_normal:
+			optimizer = torch.optim.Adam(model.parameters(), lr = normal_learning_rate)
+			is_learning_rate_normal = True
+
 		epoch_start_time = time.perf_counter_ns()
 		current_training_losses = train(
 			device,
