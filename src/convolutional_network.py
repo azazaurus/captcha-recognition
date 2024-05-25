@@ -1,117 +1,74 @@
 import os
-import string
 import time
-from typing import Dict, List, Optional, TextIO, Tuple, Union
+from typing import Dict, List, Optional, TextIO, Tuple
 
-import norse
 import norse.torch as snn
 import numpy
 import torch
 import torch.utils.data
 import torchvision
-from fast_ctc_decode import beam_search
 from torch import LongTensor, Tensor
 
 
-class ConvolutionalMaxPooling(torch.nn.Sequential):
-	def __init__(
-			self,
-			input_channels_count: int,
-			output_channels_count: int,
-			convolutional_kernel_size: Union[int, Tuple[int, int]],
-			convolutional_stride: Union[int, Tuple[int, int]],
-			convolutional_padding: Union[int, Tuple[int, int]] = 0,
-			do_pooling: bool = True) -> None:
-		layers: List[torch.nn.Module] = [
-			torch.nn.Conv2d(
-				input_channels_count,
-				output_channels_count,
-				convolutional_kernel_size,
-				convolutional_stride,
-				convolutional_padding,
-				bias = False),
-			torch.nn.BatchNorm2d(output_channels_count)]
-		if do_pooling:
-			layers.append(torch.nn.MaxPool2d(2, 2))
-		super(ConvolutionalMaxPooling, self).__init__(*layers)
-
-
-class FeatureExtractor(torch.nn.Sequential):
-	def __init__(self, input_channels_count: int = 1, output_channels_count: int = 32) -> None:
-		super(FeatureExtractor, self).__init__(
-			ConvolutionalMaxPooling(input_channels_count, 4, 3, 1, 0, False),
-			ConvolutionalMaxPooling(4, 8, 3, 1, 0, False),
-			ConvolutionalMaxPooling(8, 16, 5, 1),
-			ConvolutionalMaxPooling(16, 24, 3, 1, 0, False),
-			ConvolutionalMaxPooling(24, output_channels_count, 3, 1, 0, False))
-
-		self.input_channels_count = input_channels_count
-		self.output_channels_count = output_channels_count
-
-	@staticmethod
-	def calculate_output_feature_map_width(image_width: int) -> int:
-		return (image_width - 2 - 2 - 4) // 2 - 2 - 2
-
-	@staticmethod
-	def calculate_output_feature_map_height(image_height: int) -> int:
-		return (image_height - 2 - 2 - 4) // 2 - 2 - 2
-
-	@staticmethod
-	def calculate_output_features_count(image_width: int, image_height: int) -> int:
-		return (FeatureExtractor.calculate_output_feature_map_width(image_width)
-			* FeatureExtractor.calculate_output_feature_map_height(image_height))
-
-
 class ConvolutionalNetwork(torch.nn.Module):
-	# Space for the "blank" symbol which represents absence of symbol at the given part of input
-	captcha_alphabet: str = " " + string.digits + string.ascii_uppercase
-
 	def __init__(self, timesteps_count: int, channels_count: int, image_width: int, image_height: int) -> None:
 		super(ConvolutionalNetwork, self).__init__()
 
-		self.input_features_count = image_width * image_height
+		self.input_features_count = channels_count * image_width * image_height
+		self.fc_input_features_count = (64
+			* (((image_width - 4) // 2 - 4) // 2)
+			* (((image_height - 4) // 2 - 4) // 2))
 		self.timesteps_count = timesteps_count
 
 		self.constant_current_encoder = snn.ConstantCurrentLIFEncoder(timesteps_count)
-		self.feature_extractor = FeatureExtractor(channels_count)
-		self.feature_map_width = FeatureExtractor.calculate_output_feature_map_width(image_width)
-
-		self.lsnn0 = snn.LSNNRecurrentCell(
-			self.feature_extractor.output_channels_count * FeatureExtractor.calculate_output_feature_map_height(image_height),
-			256)
-		self.lsnn1 = snn.LSNNRecurrentCell(256, 128)
-		self.out = snn.LILinearCell(128, len(self.captcha_alphabet))
+		self.conv0 = torch.nn.Conv2d(channels_count, 32, 5, 1)
+		self.lif0 = snn.LIFCell(
+			snn.LIFParameters(
+				method = "super",
+				alpha = torch.tensor(100.0),
+				v_th = torch.as_tensor(0.7)))
+		self.conv1 = torch.nn.Conv2d(32, 64, 5, 1)
+		self.lif1 = snn.LIFCell(
+			snn.LIFParameters(
+				method = "super",
+				alpha = torch.tensor(100.0),
+				v_th = torch.as_tensor(0.7)))
+		self.fc = torch.nn.Linear(self.fc_input_features_count, 1024)
+		self.lif2 = snn.LIFCell(snn.LIFParameters(method = "super", alpha = torch.tensor(100.0)))
+		self.out = snn.LILinearCell(1024, 10)
 
 	def forward(self, images_batch: Tensor) -> Tensor:
+		batch_size = images_batch.shape[0]
 		input_spikes = self.constant_current_encoder(
 			# Flatten the images
-			images_batch.view(-1, self.input_features_count))
-		# Unflatten the images
+			images_batch.view(batch_size, self.input_features_count))
 		input_spikes = input_spikes.reshape(self.timesteps_count, *images_batch.shape)
 
-		batch_states0: List[Optional[norse.torch.LSNNState]] = [None] * images_batch.shape[0]
-		batch_states1: List[Optional[norse.torch.LSNNState]] = [None] * images_batch.shape[0]
-		batch_states_out: List[Optional[norse.torch.LIState]] = [None] * images_batch.shape[0]
-		out_voltages: List[Tensor] = []
+		lif0_state = None
+		lif1_state = None
+		lif2_state = None
+		out_state = None
+		timestep_outputs: List[Tensor] = []
 		for timestep in range(self.timesteps_count):
-			feature_map = self.feature_extractor(input_spikes[timestep])
-			feature_map = feature_map.reshape(images_batch.shape[0], -1, feature_map.shape[-1])
-			feature_map.transpose_(1, 2)
-			
-			batch_voltages: List[Tensor] = []
-			for image_index in range(images_batch.shape[0]):
-				voltages, batch_states0[image_index] = self.lsnn0(feature_map[image_index], batch_states0[image_index])
-				voltages, batch_states1[image_index] = self.lsnn1(voltages, batch_states1[image_index])
-				voltages, batch_states_out[image_index] = self.out(voltages, batch_states_out[image_index])
-				batch_voltages.append(voltages.cpu())
+			timestep_output = self.conv0(input_spikes[timestep])
+			timestep_output, lif0_state = self.lif0(timestep_output, lif0_state)
+			timestep_output = torch.nn.functional.max_pool2d(timestep_output, 2, 2)
+			timestep_output *= 10
+			timestep_output = self.conv1(timestep_output)
+			timestep_output, lif1_state = self.lif1(timestep_output, lif1_state)
+			timestep_output = torch.nn.functional.max_pool2d(timestep_output, 2, 2)
+			timestep_output = timestep_output.view(batch_size, self.fc_input_features_count)
+			timestep_output = self.fc(timestep_output)
+			timestep_output, lif2_state = self.lif2(timestep_output, lif2_state)
+			timestep_output = torch.nn.functional.relu(timestep_output)
+			timestep_output, out_state = self.out(timestep_output, out_state)
+			timestep_outputs.append(timestep_output)
 
-			out_voltages.append(torch.stack(batch_voltages))
+		# Gather output over all timesteps
+		output = torch.max(torch.stack(timestep_outputs), 0).values
+		output = torch.nn.functional.log_softmax(output, dim = 1)
 
-		# Gather voltages over all timesteps
-		voltages = torch.max(torch.stack(out_voltages), 0).values
-		voltages_length = torch.full((images_batch.shape[0],), self.feature_map_width, dtype = torch.long)
-
-		return voltages, voltages_length
+		return output
 
 
 class ModelDto:
@@ -151,10 +108,8 @@ class ModelParameters:
 def train(
 		device: torch.device,
 		model: torch.nn.Module,
-		ctc_loss_calculator: torch.nn.CTCLoss,
 		optimizer: torch.optim.Optimizer,
 		data_loader: torch.utils.data.DataLoader,
-		captcha_alphabet_map: Dict[str, int],
 		reports_count_per_epoch: int
 	) -> List[float]:
 	model.train()
@@ -164,22 +119,16 @@ def train(
 	losses: List[float] = []
 
 	batch_processing_time_sum = 0
-	for current_batch_index, (data, labels) in enumerate(data_loader):
+	for current_batch_index, (data, target) in enumerate(data_loader):
 		batch_start_time = time.perf_counter_ns()
 
 		data: Tensor = data.to(device)
-		target, target_length = to_target(labels, captcha_alphabet_map)
+		target: Tensor = target.to(device)
 
 		optimizer.zero_grad()
-		voltages, output_length = model(data)
+		output = model(data)
 
-		log_probabilities = torch.nn.functional.log_softmax(voltages, dim = 2)
-		log_probabilities = log_probabilities.transpose(0, 1)
-		loss: Tensor = ctc_loss_calculator.forward(
-			log_probabilities,
-			target,
-			output_length,
-			target_length)
+		loss: Tensor = torch.nn.functional.nll_loss(output, target)
 		loss.backward()
 
 		optimizer.step()
@@ -206,9 +155,7 @@ def train(
 def test(
 		device: torch.device,
 		model: torch.nn.Module,
-		ctc_loss_calculator: torch.nn.CTCLoss,
 		data_loader: torch.utils.data.DataLoader,
-		captcha_alphabet_map: Dict[str, int],
 		test_results_file: TextIO
 	) -> Tuple[float, float]:
 	model.eval()
@@ -217,36 +164,22 @@ def test(
 	correct_predictions_count = 0
 	ctc_decoding_time_sum = 0
 	with torch.no_grad():
-		for data, labels in data_loader:
+		for data, target in data_loader:
 			data: Tensor = data.to(device)
-			target, target_length = to_target(labels, captcha_alphabet_map)
+			target: Tensor = target.to(device)
 
-			voltages, output_length = model(data)
+			output = model(data)
 
-			log_probabilities = torch.nn.functional.log_softmax(voltages, dim = 2)
-			log_probabilities = log_probabilities.transpose(0, 1)
-			loss_sum += (ctc_loss_calculator
-				.forward(
-					log_probabilities,
-					target,
-					output_length,
-					target_length)
-				.item())
+			loss_sum += torch.nn.functional.nll_loss(output, target, reduction="sum").item()
 
-			batch_probabilities = torch.nn.functional.softmax(voltages, dim = 2)
-			for probabilities, label in zip(batch_probabilities, labels):
-				ctc_start_time = time.perf_counter_ns()
-				output, path = beam_search(
-					probabilities.numpy(),
-					ConvolutionalNetwork.captcha_alphabet,
-					12)
-				ctc_decoding_time_sum += time.perf_counter_ns() - ctc_start_time
-
-				is_correct_prediction = output == str(label.item())
+			# get the index of the max log-probability
+			predictions = output.argmax(1, True)
+			for label, prediction in zip(target, predictions):
+				is_correct_prediction = prediction.item() == label.item()
 				if is_correct_prediction:
 					correct_predictions_count += 1
 
-				test_results_file.write(f"{label},{output},{1 if is_correct_prediction else 0}\n")
+				test_results_file.write(f"{label},{prediction},{1 if is_correct_prediction else 0}\n")
 
 	average_loss = loss_sum / len(data_loader)
 	accuracy = 100 * correct_predictions_count / len(data_loader.dataset)
@@ -296,9 +229,9 @@ def main(
 		max_epoch_count: Optional[int] = None,
 		early_stopping_epoch_count: Optional[int] = 4,
 		batch_size: int = 32,
-		learning_rate: float = 2e-4,
-		image_timesteps_count: int = 150,
-		reports_count_per_epoch: int = 10,
+		learning_rate: float = 2e-3,
+		image_timesteps_count: int = 200,
+		reports_count_per_epoch: int = 1000,
 		input_model_file_name: Optional[str] = None,
 		output_model_file_name: Optional[str] = "model-{0}.pt",
 		random_seed: Optional[int] = 1234
@@ -314,17 +247,15 @@ def main(
 	image_transform = torchvision.transforms.Compose([
 		torchvision.transforms.ToTensor(),
 		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
+	kwargs = {"num_workers": 1, "pin_memory": True} if device_type == "cuda" else {}
 	train_dataset = torchvision.datasets.MNIST(".", True, image_transform, download = True)
-	train_loader = torch.utils.data.DataLoader(train_dataset, batch_size, True)
+	train_loader = torch.utils.data.DataLoader(train_dataset, batch_size, True, **kwargs)
 	test_dataset = torchvision.datasets.MNIST(".", False, image_transform)
-	test_loader = torch.utils.data.DataLoader(test_dataset, batch_size)
+	test_loader = torch.utils.data.DataLoader(test_dataset, batch_size, **kwargs)
 	os.makedirs("test-results", exist_ok = True)
 
 	model = ConvolutionalNetwork(image_timesteps_count, 1, 28, 28).to(device)
-	ctc_loss_calculator = torch.nn.CTCLoss()
 	optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
-
-	captcha_alphabet_map = {x[1]: x[0] for x in enumerate(ConvolutionalNetwork.captcha_alphabet)}
 
 	loaded_model_parameters: Optional[ModelParameters] = None
 	if input_model_file_name is not None:
@@ -347,19 +278,15 @@ def main(
 		current_training_losses = train(
 			device,
 			model,
-			ctc_loss_calculator,
 			optimizer,
 			train_loader,
-			captcha_alphabet_map,
 			reports_count_per_epoch)
 		with open(f"test-results/epoch-{epoch}.csv", mode = "wt") as test_results_file:
 			test_results_file.write("\"Target\",\"Prediction\",\"Is correct\"\n")
 			test_loss, accuracy = test(
 				device,
 				model,
-				ctc_loss_calculator,
 				test_loader,
-				captcha_alphabet_map,
 				test_results_file)
 		epoch_end_time = time.perf_counter_ns()
 
