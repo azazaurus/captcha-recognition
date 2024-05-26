@@ -237,7 +237,7 @@ def main(
 		batch_size: int = 8,
 		starting_learning_rate: float = 1e-2,
 		normal_learning_rate: float = 1e-3,
-		image_timesteps_count: int = 150,
+		image_timesteps_count: int = 200,
 		reports_count_per_epoch: int = 1000,
 		input_model_file_name: Optional[str] = None,
 		output_model_file_name: Optional[str] = "model-{0}.pt",
@@ -253,13 +253,13 @@ def main(
 
 	image_transform = torchvision.transforms.ToTensor()
 	loader_parameters = {"num_workers": 1, "pin_memory": True} if device_type == "cuda" else {}
-	train_dataset = torchvision.datasets.SVHN("SVHN", "train", image_transform, download = True)
+	train_dataset = torchvision.datasets.MNIST(".", True, image_transform, download = True)
 	train_loader = torch.utils.data.DataLoader(train_dataset, batch_size, True, **loader_parameters)
-	test_dataset = torchvision.datasets.SVHN("SVHN", "test", image_transform, download = True)
+	test_dataset = torchvision.datasets.MNIST(".", False, image_transform)
 	test_loader = torch.utils.data.DataLoader(test_dataset, batch_size, **loader_parameters)
 	os.makedirs("test-results", exist_ok = True)
 
-	model = CaptchaRecognizer(image_timesteps_count, 3, 32, 32).to(device)
+	model = CaptchaRecognizer(image_timesteps_count, 1, 28, 28).to(device)
 	optimizer = torch.optim.Adam(model.parameters(), lr = starting_learning_rate)
 	is_learning_rate_normal = False
 
