@@ -1,4 +1,5 @@
 import os
+import string
 import time
 from typing import Dict, List, Optional, TextIO, Tuple
 
@@ -7,16 +8,21 @@ import numpy
 import torch
 import torch.utils.data
 import torchvision
+from fast_ctc_decode import beam_search
 from torch import LongTensor, Tensor
 
 
 class ConvolutionalNetwork(torch.nn.Module):
+	# Space for the "blank" symbol which represents absence of symbol at the given part of input
+	captcha_alphabet: str = " " + string.digits
+
 	def __init__(self, timesteps_count: int, channels_count: int, image_width: int, image_height: int) -> None:
 		super(ConvolutionalNetwork, self).__init__()
 
 		self.input_features_count = channels_count * image_width * image_height
+		self.output_length = (((image_width - 4) // 2 - 4) // 2)
 		self.fc_input_features_count = (64
-			* (((image_width - 4) // 2 - 4) // 2)
+			* self.output_length
 			* (((image_height - 4) // 2 - 4) // 2))
 		self.timesteps_count = timesteps_count
 
@@ -33,9 +39,9 @@ class ConvolutionalNetwork(torch.nn.Module):
 				method = "super",
 				alpha = torch.tensor(100.0),
 				v_th = torch.as_tensor(0.7)))
-		self.fc = torch.nn.Linear(self.fc_input_features_count, 1024)
+		self.fc = torch.nn.Linear(self.fc_input_features_count, 1024 * self.output_length)
 		self.lif2 = snn.LIFCell(snn.LIFParameters(method = "super", alpha = torch.tensor(100.0)))
-		self.out = snn.LILinearCell(1024, 10)
+		self.out = snn.LILinearCell(1024 * self.output_length, 10 * self.output_length)
 
 	def forward(self, images_batch: Tensor) -> Tensor:
 		batch_size = images_batch.shape[0]
@@ -62,13 +68,14 @@ class ConvolutionalNetwork(torch.nn.Module):
 			timestep_output, lif2_state = self.lif2(timestep_output, lif2_state)
 			timestep_output = torch.nn.functional.relu(timestep_output)
 			timestep_output, out_state = self.out(timestep_output, out_state)
+			timestep_output = timestep_output.reshape(batch_size, self.output_length, -1)
 			timestep_outputs.append(timestep_output)
 
 		# Gather output over all timesteps
 		output = torch.max(torch.stack(timestep_outputs), 0).values
-		output = torch.nn.functional.log_softmax(output, dim = 1)
+		output_length = torch.full((images_batch.shape[0],), self.output_length, dtype = torch.long)
 
-		return output
+		return output, output_length
 
 
 class ModelDto:
@@ -108,8 +115,10 @@ class ModelParameters:
 def train(
 		device: torch.device,
 		model: torch.nn.Module,
+		ctc_loss_calculator: torch.nn.CTCLoss,
 		optimizer: torch.optim.Optimizer,
 		data_loader: torch.utils.data.DataLoader,
+		captcha_alphabet_map: Dict[str, int],
 		reports_count_per_epoch: int
 	) -> List[float]:
 	model.train()
@@ -119,16 +128,22 @@ def train(
 	losses: List[float] = []
 
 	batch_processing_time_sum = 0
-	for current_batch_index, (data, target) in enumerate(data_loader):
+	for current_batch_index, (data, labels) in enumerate(data_loader):
 		batch_start_time = time.perf_counter_ns()
 
 		data: Tensor = data.to(device)
-		target: Tensor = target.to(device)
+		target, target_length = to_target(labels, captcha_alphabet_map)
 
 		optimizer.zero_grad()
-		output = model(data)
+		output, output_length = model(data)
 
-		loss: Tensor = torch.nn.functional.nll_loss(output, target)
+		log_probabilities = torch.nn.functional.log_softmax(output, dim = 2)
+		log_probabilities = log_probabilities.transpose(0, 1)
+		loss: Tensor = ctc_loss_calculator.forward(
+			log_probabilities,
+			target,
+			output_length,
+			target_length)
 		loss.backward()
 
 		optimizer.step()
@@ -155,7 +170,9 @@ def train(
 def test(
 		device: torch.device,
 		model: torch.nn.Module,
+		ctc_loss_calculator: torch.nn.CTCLoss,
 		data_loader: torch.utils.data.DataLoader,
+		captcha_alphabet_map: Dict[str, int],
 		test_results_file: TextIO
 	) -> Tuple[float, float]:
 	model.eval()
@@ -164,18 +181,32 @@ def test(
 	correct_predictions_count = 0
 	ctc_decoding_time_sum = 0
 	with torch.no_grad():
-		for data, target in data_loader:
+		for data, labels in data_loader:
 			data: Tensor = data.to(device)
-			target: Tensor = target.to(device)
+			target, target_length = to_target(labels, captcha_alphabet_map)
 
-			output = model(data)
+			output, output_length = model(data)
 
-			loss_sum += torch.nn.functional.nll_loss(output, target, reduction="sum").item()
+			log_probabilities = torch.nn.functional.log_softmax(output, dim = 2)
+			log_probabilities = log_probabilities.transpose(0, 1)
+			loss_sum += (ctc_loss_calculator
+				.forward(
+					log_probabilities,
+					target,
+					output_length,
+					target_length)
+				.item())
 
-			# get the index of the max log-probability
-			predictions = output.argmax(1, True)
-			for label, prediction in zip(target, predictions):
-				is_correct_prediction = prediction.item() == label.item()
+			batch_probabilities = torch.nn.functional.softmax(output, dim = 2)
+			for probabilities, label in zip(batch_probabilities, labels):
+				ctc_start_time = time.perf_counter_ns()
+				prediction, path = beam_search(
+					probabilities.numpy(),
+					ConvolutionalNetwork.captcha_alphabet,
+					15)
+				ctc_decoding_time_sum += time.perf_counter_ns() - ctc_start_time
+
+				is_correct_prediction = prediction == str(label.item())
 				if is_correct_prediction:
 					correct_predictions_count += 1
 
@@ -255,7 +286,10 @@ def main(
 	os.makedirs("test-results", exist_ok = True)
 
 	model = ConvolutionalNetwork(image_timesteps_count, 1, 28, 28).to(device)
+	ctc_loss_calculator = torch.nn.CTCLoss()
 	optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
+
+	captcha_alphabet_map = {x[1]: x[0] for x in enumerate(ConvolutionalNetwork.captcha_alphabet)}
 
 	loaded_model_parameters: Optional[ModelParameters] = None
 	if input_model_file_name is not None:
@@ -278,15 +312,19 @@ def main(
 		current_training_losses = train(
 			device,
 			model,
+			ctc_loss_calculator,
 			optimizer,
 			train_loader,
+			captcha_alphabet_map,
 			reports_count_per_epoch)
 		with open(f"test-results/epoch-{epoch}.csv", mode = "wt") as test_results_file:
 			test_results_file.write("\"Target\",\"Prediction\",\"Is correct\"\n")
 			test_loss, accuracy = test(
 				device,
 				model,
+				ctc_loss_calculator,
 				test_loader,
+				captcha_alphabet_map,
 				test_results_file)
 		epoch_end_time = time.perf_counter_ns()
 
