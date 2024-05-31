@@ -15,53 +15,59 @@ class CaptchaRecognizer(torch.nn.Module):
 		super(CaptchaRecognizer, self).__init__()
 
 		self.input_features_count = channels_count * image_width * image_height
+		self.fc_input_features_count = (64
+			* (((image_width - 4) // 2 - 4) // 2)
+			* (((image_height - 4) // 2 - 4) // 2))
 		self.timesteps_count = timesteps_count
 
 		self.constant_current_encoder = snn.ConstantCurrentLIFEncoder(timesteps_count)
-		self.lif0 = snn.LIFCell()
-		self.li0 = snn.LILinearCell(self.input_features_count, 2000)
-		self.lif1 = snn.LIFCell()
-		self.li1 = snn.LILinearCell(2000, 1500)
-		self.lif2 = snn.LIFCell()
-		self.li2 = snn.LILinearCell(1500, 1000)
-		self.lif3 = snn.LIFCell()
-		self.li3 = snn.LILinearCell(1000, 500)
-		self.lif4 = snn.LIFCell()
-		self.li4 = snn.LILinearCell(500, 100)
-		self.lif5 = snn.LIFCell()
-		self.out = snn.LILinearCell(100, 10)
+		self.conv0 = torch.nn.Conv2d(channels_count, 32, 5, 1)
+		self.lif0 = snn.LIFCell(
+			snn.LIFParameters(
+				method = "super",
+				alpha = torch.tensor(100.0),
+				v_th = torch.as_tensor(0.7)))
+		self.conv1 = torch.nn.Conv2d(32, 64, 5, 1)
+		self.lif1 = snn.LIFCell(
+			snn.LIFParameters(
+				method = "super",
+				alpha = torch.tensor(100.0),
+				v_th = torch.as_tensor(0.7)))
+		self.fc0 = torch.nn.Linear(self.fc_input_features_count, 1024)
+		self.lif2 = snn.LIFCell(snn.LIFParameters(method = "super", alpha = torch.tensor(100.0)))
+		self.fc1 = torch.nn.Linear(1024, 256)
+		self.lif3 = snn.LIFCell(snn.LIFParameters(method = "super", alpha = torch.tensor(100.0)))
+		self.out = snn.LILinearCell(256, 10)
 
 	def forward(self, images_batch: Tensor) -> Tensor:
 		batch_size = images_batch.shape[0]
 		input_spikes = self.constant_current_encoder(
 			# Flatten the images
 			images_batch.view(batch_size, self.input_features_count))
+		input_spikes = input_spikes.reshape(self.timesteps_count, *images_batch.shape)
 
 		lif0_state = None
-		li0_state = None
 		lif1_state = None
-		li1_state = None
 		lif2_state = None
-		li2_state = None
 		lif3_state = None
-		li3_state = None
-		lif4_state = None
-		li4_state = None
-		lif5_state = None
 		out_state = None
 		timestep_outputs: List[Tensor] = []
 		for timestep in range(self.timesteps_count):
-			timestep_output, lif0_state = self.lif0(input_spikes[timestep], lif0_state)
-			timestep_output, li0_state = self.li0(timestep_output, li0_state)
+			timestep_output = self.conv0(input_spikes[timestep])
+			timestep_output, lif0_state = self.lif0(timestep_output, lif0_state)
+			timestep_output = torch.nn.functional.max_pool2d(timestep_output, 2, 2)
+			timestep_output *= 10
+			timestep_output = self.conv1(timestep_output)
 			timestep_output, lif1_state = self.lif1(timestep_output, lif1_state)
-			timestep_output, li1_state = self.li1(timestep_output, li1_state)
+			timestep_output = torch.nn.functional.max_pool2d(timestep_output, 2, 2)
+			timestep_output *= 10
+			timestep_output = timestep_output.view(batch_size, self.fc_input_features_count)
+			timestep_output = self.fc0(timestep_output)
 			timestep_output, lif2_state = self.lif2(timestep_output, lif2_state)
-			timestep_output, li2_state = self.li2(timestep_output, li2_state)
+			timestep_output *= 10
+			timestep_output = self.fc1(timestep_output)
 			timestep_output, lif3_state = self.lif3(timestep_output, lif3_state)
-			timestep_output, li3_state = self.li3(timestep_output, li3_state)
-			timestep_output, lif4_state = self.lif4(timestep_output, lif4_state)
-			timestep_output, li4_state = self.li4(timestep_output, li4_state)
-			timestep_output, lif5_state = self.lif5(timestep_output, lif5_state)
+			timestep_output = torch.nn.functional.relu(timestep_output)
 			timestep_output, out_state = self.out(timestep_output, out_state)
 			timestep_outputs.append(timestep_output)
 
@@ -228,14 +234,13 @@ def main(
 		device_type: str = "cpu",
 		max_epoch_count: Optional[int] = None,
 		early_stopping_epoch_count: Optional[int] = 4,
-		batch_size: int = 8,
-		starting_learning_rate: float = 1e-2,
-		normal_learning_rate: float = 1e-3,
+		batch_size: int = 32,
+		learning_rate: float = 2e-3,
 		image_timesteps_count: int = 200,
-		reports_count_per_epoch: int = 1000,
+		reports_count_per_epoch: int = 7500,
 		input_model_file_name: Optional[str] = None,
 		output_model_file_name: Optional[str] = "model-{0}.pt",
-		random_seed: Optional[int] = 1234
+		random_seed: Optional[int] = 3456
 	) -> None:
 	if random_seed is not None:
 		numpy.random.seed(random_seed)
@@ -245,7 +250,9 @@ def main(
 
 	device: torch.device = torch.device(device_type)
 
-	image_transform = torchvision.transforms.ToTensor()
+	image_transform = torchvision.transforms.Compose([
+		torchvision.transforms.ToTensor(),
+		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
 	loader_parameters = {"num_workers": 1, "pin_memory": True} if device_type == "cuda" else {}
 	train_dataset = torchvision.datasets.MNIST(".", True, image_transform, download = True)
 	train_loader = torch.utils.data.DataLoader(train_dataset, batch_size, True, **loader_parameters)
@@ -254,8 +261,7 @@ def main(
 	os.makedirs("test-results", exist_ok = True)
 
 	model = CaptchaRecognizer(image_timesteps_count, 1, 28, 28).to(device)
-	optimizer = torch.optim.Adam(model.parameters(), lr = starting_learning_rate)
-	is_learning_rate_normal = False
+	optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
 
 	loaded_model_parameters: Optional[ModelParameters] = None
 	if input_model_file_name is not None:
@@ -274,10 +280,6 @@ def main(
 		epochs_without_progress_in_row = loaded_model_parameters.epochs_without_progress_in_row
 	while ((max_epoch_count is None or epoch < max_epoch_count)
 			and (early_stopping_epoch_count is None or epochs_without_progress_in_row < early_stopping_epoch_count)):
-		if epoch >= 30 and not is_learning_rate_normal:
-			optimizer = torch.optim.Adam(model.parameters(), lr = normal_learning_rate)
-			is_learning_rate_normal = True
-
 		epoch_start_time = time.perf_counter_ns()
 		current_training_losses = train(
 			device,
