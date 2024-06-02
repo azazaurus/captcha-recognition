@@ -233,7 +233,7 @@ def save(file_path: str, parameters: ModelParameters) -> None:
 def main(
 		device_type: str = "cpu",
 		max_epoch_count: Optional[int] = None,
-		early_stopping_epoch_count: Optional[int] = 4,
+		early_stopping_epoch_count: Optional[int] = 8,
 		batch_size: int = 32,
 		learning_rate: float = 2e-3,
 		image_timesteps_count: int = 200,
@@ -254,13 +254,13 @@ def main(
 		torchvision.transforms.ToTensor(),
 		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
 	loader_parameters = {"num_workers": 1, "pin_memory": True} if device_type == "cuda" else {}
-	train_dataset = torchvision.datasets.MNIST(".", True, image_transform, download = True)
+	train_dataset = torchvision.datasets.SVHN("SVHN", "train", image_transform, download = True)
 	train_loader = torch.utils.data.DataLoader(train_dataset, batch_size, True, **loader_parameters)
-	test_dataset = torchvision.datasets.MNIST(".", False, image_transform)
+	test_dataset = torchvision.datasets.SVHN("SVHN", "test", image_transform, download = True)
 	test_loader = torch.utils.data.DataLoader(test_dataset, batch_size, **loader_parameters)
 	os.makedirs("test-results", exist_ok = True)
 
-	model = CaptchaRecognizer(image_timesteps_count, 1, 28, 28).to(device)
+	model = CaptchaRecognizer(image_timesteps_count, 3, 32, 32).to(device)
 	optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
 
 	loaded_model_parameters: Optional[ModelParameters] = None
