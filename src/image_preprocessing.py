@@ -8,8 +8,9 @@ from cv2.typing import MatLike
 def preprocess_image(image: MatLike) -> MatLike:
 	gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 	gray_with_border = cv2.copyMakeBorder(gray, 8, 8, 8, 8, cv2.BORDER_REPLICATE)
+	smoothed = cv2.GaussianBlur(gray_with_border, (3, 3), 0)
 	thresholded = (cv2
-		.threshold(gray_with_border, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1])
+		.threshold(smoothed, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1])
 
 	return thresholded
 
