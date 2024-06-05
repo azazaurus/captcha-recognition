@@ -1,4 +1,5 @@
 import os
+import string
 import time
 from typing import Dict, List, Optional, TextIO, Tuple
 
@@ -9,8 +10,12 @@ import torch.utils.data
 import torchvision
 from torch import LongTensor, Tensor
 
+from captcha_dataset import CaptchaDataset
+
 
 class CaptchaRecognizer(torch.nn.Module):
+	captcha_alphabet: str = string.digits + string.ascii_uppercase
+
 	def __init__(self, timesteps_count: int, channels_count: int, image_width: int, image_height: int) -> None:
 		super(CaptchaRecognizer, self).__init__()
 
@@ -37,7 +42,7 @@ class CaptchaRecognizer(torch.nn.Module):
 		self.lif2 = snn.LIFCell(snn.LIFParameters(method = "super", alpha = torch.tensor(100.0)))
 		self.fc1 = torch.nn.Linear(1024, 256)
 		self.lif3 = snn.LIFCell(snn.LIFParameters(method = "super", alpha = torch.tensor(100.0)))
-		self.out = snn.LILinearCell(256, 10)
+		self.out = snn.LILinearCell(256, len(CaptchaRecognizer.captcha_alphabet))
 
 	def forward(self, images_batch: Tensor) -> Tensor:
 		batch_size = images_batch.shape[0]
@@ -117,6 +122,7 @@ def train(
 		model: torch.nn.Module,
 		optimizer: torch.optim.Optimizer,
 		data_loader: torch.utils.data.DataLoader,
+		captcha_alphabet_map: Dict[str, int],
 		reports_count_per_epoch: int
 	) -> List[float]:
 	model.train()
@@ -126,11 +132,11 @@ def train(
 	losses: List[float] = []
 
 	batch_processing_time_sum = 0
-	for current_batch_index, (data, target) in enumerate(data_loader):
+	for current_batch_index, (data, labels) in enumerate(data_loader):
 		batch_start_time = time.perf_counter_ns()
 
 		data: Tensor = data.to(device)
-		target: Tensor = target.to(device)
+		target: LongTensor = to_target(labels, captcha_alphabet_map).to(device)
 
 		optimizer.zero_grad()
 		output = model(data)
@@ -164,6 +170,8 @@ def test(
 		device: torch.device,
 		model: torch.nn.Module,
 		data_loader: torch.utils.data.DataLoader,
+		captcha_alphabet_map: Dict[str, int],
+		labels_map: List[str],
 		test_results_file: TextIO
 	) -> Tuple[float, float]:
 	model.eval()
@@ -171,9 +179,9 @@ def test(
 	loss_sum = 0.0
 	correct_predictions_count = 0
 	with torch.no_grad():
-		for data, target in data_loader:
+		for data, labels in data_loader:
 			data: Tensor = data.to(device)
-			target: Tensor = target.to(device)
+			target: LongTensor = to_target(labels, captcha_alphabet_map).to(device)
 
 			output = model(data)
 
@@ -181,12 +189,15 @@ def test(
 
 			# get the index of the max log-probability
 			predictions = output.argmax(1, True)
-			for label, prediction in zip(target, predictions):
-				is_correct_prediction = prediction.item() == label.item()
+			for target_item, prediction in zip(target, predictions):
+				is_correct_prediction = prediction.item() == target_item.item()
 				if is_correct_prediction:
 					correct_predictions_count += 1
 
-				test_results_file.write(f"{label},{prediction},{1 if is_correct_prediction else 0}\n")
+				test_results_file.write(
+					f"{labels_map[int(target_item.item())]},"
+					f"{labels_map[prediction.item()]},"
+					f"{1 if is_correct_prediction else 0}\n")
 
 	average_loss = loss_sum / len(data_loader)
 	accuracy = 100 * correct_predictions_count / len(data_loader.dataset)
@@ -195,10 +206,8 @@ def test(
 	return average_loss, accuracy
 
 
-def to_target(labels: LongTensor, alphabet_map: Dict[str, int]) -> Tuple[LongTensor, LongTensor]:
-	target = torch.as_tensor([alphabet_map[str(symbol.item())] for symbol in labels], dtype = torch.long)
-	target_length = [1] * len(target)
-	return target, torch.as_tensor(target_length, dtype = torch.long)
+def to_target(labels: Tuple[str, ...], alphabet_map: Dict[str, int]) -> Tuple[LongTensor]:
+	return torch.as_tensor([alphabet_map[symbol] for symbol in labels], dtype = torch.long)
 
 
 def load(
@@ -235,6 +244,7 @@ def main(
 		max_epoch_count: Optional[int] = None,
 		early_stopping_epoch_count: Optional[int] = 4,
 		batch_size: int = 32,
+		test_dataset_fraction: float = 10000 / 70000,
 		learning_rate: float = 2e-3,
 		image_timesteps_count: int = 200,
 		reports_count_per_epoch: int = 7500,
@@ -252,16 +262,21 @@ def main(
 
 	image_transform = torchvision.transforms.Compose([
 		torchvision.transforms.ToTensor(),
+		# leave only one channel since they're all the same
+		torchvision.transforms.Lambda(lambda x: x[0:1, :, :]),
 		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
 	loader_parameters = {"num_workers": 1, "pin_memory": True} if device_type == "cuda" else {}
-	train_dataset = torchvision.datasets.MNIST(".", True, image_transform, download = True)
+	dataset = CaptchaDataset("ds-1/", transform = image_transform)
+	train_dataset, test_dataset = torch.utils.data.random_split(
+		dataset,
+		[1 - test_dataset_fraction, test_dataset_fraction])
 	train_loader = torch.utils.data.DataLoader(train_dataset, batch_size, True, **loader_parameters)
-	test_dataset = torchvision.datasets.MNIST(".", False, image_transform)
 	test_loader = torch.utils.data.DataLoader(test_dataset, batch_size, **loader_parameters)
 	os.makedirs("test-results", exist_ok = True)
 
 	model = CaptchaRecognizer(image_timesteps_count, 1, 28, 28).to(device)
 	optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
+	captcha_alphabet_map = {x[1]: x[0] for x in enumerate(CaptchaRecognizer.captcha_alphabet)}
 
 	loaded_model_parameters: Optional[ModelParameters] = None
 	if input_model_file_name is not None:
@@ -286,6 +301,7 @@ def main(
 			model,
 			optimizer,
 			train_loader,
+			captcha_alphabet_map,
 			reports_count_per_epoch)
 		with open(f"test-results/epoch-{epoch}.csv", mode = "wt") as test_results_file:
 			test_results_file.write("\"Target\",\"Prediction\",\"Is correct\"\n")
@@ -293,6 +309,8 @@ def main(
 				device,
 				model,
 				test_loader,
+				captcha_alphabet_map,
+				list(CaptchaRecognizer.captcha_alphabet),
 				test_results_file)
 		epoch_end_time = time.perf_counter_ns()
 
