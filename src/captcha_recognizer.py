@@ -39,7 +39,7 @@ class CaptchaRecognizer(torch.nn.Module):
 				alpha = torch.tensor(100.0),
 				v_th = torch.as_tensor(0.7)))
 		self.fc0 = torch.nn.Linear(self.fc_input_features_count, 1024)
-		self.lif2 = snn.LIFCell(snn.LIFParameters(method = "super", alpha = torch.tensor(100.0)))
+		self.lif2 = snn.LIFRecurrentCell(1024, 1024, snn.LIFParameters(method = "super", alpha = torch.tensor(100.0)))
 		self.out = snn.LILinearCell(1024, len(CaptchaRecognizer.captcha_alphabet))
 
 	def forward(self, images_batch: Tensor) -> Tensor:
