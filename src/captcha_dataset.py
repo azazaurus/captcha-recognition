@@ -8,9 +8,10 @@ from torch import Tensor
 from torchvision.datasets import ImageFolder
 
 from image_preprocessing import (
-	crop_with_padding,
+	SymbolFilterParameters,
+	crop,
 	extend_to_square,
-	extract_symbols,
+	extract_symbol_contours,
 	preprocess_image,
 	resize)
 
@@ -22,14 +23,14 @@ def opencv_to_pil(image: MatLike) -> PIL.Image.Image:
 
 def train_captcha_transform(image: MatLike) -> MatLike:
 	preprocessed_image = preprocess_image(image)
-	symbol_regions = extract_symbols(preprocessed_image)
-	if len(symbol_regions) != 1:
+	symbol_contours = extract_symbol_contours(preprocessed_image)
+	if len(symbol_contours) != 1:
 		# Bad sample but we can't do much here
 		square_image = extend_to_square(preprocessed_image)
 		resized_image = resize(square_image, 28, 28)
 		return resized_image
 
-	symbol = crop_with_padding(preprocessed_image, symbol_regions[0], 2)
+	symbol = crop(preprocessed_image, symbol_contours[0], 2)
 	square_symbol = extend_to_square(symbol)
 	resized_symbol = resize(square_symbol, 28, 28)
 
@@ -59,16 +60,18 @@ class CaptchaDataset(ImageFolder):
 
 def test_captcha_transform(image: MatLike) -> List[MatLike]:
 	preprocessed_image = preprocess_image(image)
-	symbol_regions = extract_symbols(preprocessed_image)
-	if len(symbol_regions) == 0:
+	symbol_filter_parameters = SymbolFilterParameters(
+		preprocessed_image.shape[0] * preprocessed_image.shape[1] // 900)
+	symbol_contours = extract_symbol_contours(preprocessed_image, symbol_filter_parameters)
+	if len(symbol_contours) == 0:
 		# Bad sample but we can't do much here
 		square_image = extend_to_square(preprocessed_image)
 		resized_image = resize(square_image, 28, 28)
 		return [resized_image]
 
 	symbols: List[MatLike] = []
-	for symbol_region in symbol_regions:
-		symbol = crop_with_padding(preprocessed_image, symbol_region, 2)
+	for symbol_contour in symbol_contours:
+		symbol = crop(preprocessed_image, symbol_contour, 2)
 		square_symbol = extend_to_square(symbol)
 		resized_symbol = resize(square_symbol, 28, 28)
 		symbols.append(resized_symbol)

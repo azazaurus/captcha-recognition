@@ -1,8 +1,15 @@
+import math
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, NamedTuple, Optional, Tuple
 
 import cv2
+import numpy
 from cv2.typing import MatLike
+from numpy import ndarray
+
+
+class SymbolFilterParameters(NamedTuple):
+	min_pixels_per_symbol: int = 0
 
 
 def preprocess_image(image: MatLike) -> MatLike:
@@ -15,34 +22,69 @@ def preprocess_image(image: MatLike) -> MatLike:
 	return thresholded
 
 
-def crop_with_padding(image: MatLike, cropping_area: Tuple[int, int, int, int], padding: int) -> MatLike:
-	left, top, width, height = cropping_area
-	return image[
-		max(top - padding, 0):min(top + height + padding, image.shape[0]),
-		max(left - padding, 0):min(left + width + padding, image.shape[1])]
+def crop(image: MatLike, cropping_contour: ndarray, padding: int = 0) -> MatLike:
+	contour_mask = numpy.zeros((image.shape[0], image.shape[1], 1), dtype = numpy.uint8)
+	cv2.drawContours(contour_mask, [cropping_contour], -1, (255), thickness = cv2.FILLED)
+
+	image_with_contour_only = cv2.bitwise_and(image, image, mask = contour_mask)
+
+	left, top, width, height = cv2.boundingRect(cropping_contour)
+	cropped_contour = image_with_contour_only[top:top + height, left:left + width]
+
+	if padding > 0:
+		cropped_contour = cv2.copyMakeBorder(
+			cropped_contour,
+			padding,
+			padding,
+			padding,
+			padding,
+			cv2.BORDER_CONSTANT,
+			None,
+			0)
+
+	return cropped_contour
 
 
-def extract_symbols(image: MatLike) -> List[Tuple[int, int, int, int]]:
+def count_pixels(image: MatLike, contour: ndarray) -> int:
+	contour_mask = numpy.zeros((image.shape[0], image.shape[1], 1), dtype = numpy.uint8)
+	cv2.drawContours(contour_mask, [contour], -1, (255), thickness = cv2.FILLED)
+
+	left, top, width, height = cv2.boundingRect(contour)
+	return numpy.count_nonzero(contour_mask[top:top + height, left:left + width])
+
+
+def get_center_of_region(region: Tuple[int, int, int, int]) -> Tuple[float, float]:
+	left, top, width, height = region
+	return (left + width) / 2, (top + height) / 2
+
+
+def get_distance_between_regions(
+		first: Tuple[int, int, int, int],
+		second: Tuple[int, int, int, int]
+	) -> float:
+	first_center = get_center_of_region(first)
+	second_center = get_center_of_region(second)
+	return math.sqrt(
+		(first_center[0] - second_center[0]) * (first_center[0] - second_center[0])
+		+ (first_center[1] - second_center[1]) * (first_center[1] - second_center[1]))
+
+
+def extract_symbol_contours(
+		image: MatLike,
+		symbol_filter_parameters: Optional[SymbolFilterParameters] = None
+	) -> List[ndarray]:
+	symbol_filter_parameters = (symbol_filter_parameters
+		if symbol_filter_parameters is not None
+		else SymbolFilterParameters())
+
 	contours, _ = cv2.findContours(image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-	symbol_regions: List[Tuple[int, int, int, int]] = []
-	for contour in contours:
-		(left, top, width, height) = cv2.boundingRect(contour)
-
-		# Compare the width and height of the contour to detect symbols that are
-		# conjoined into one chunk
-		if width / height > 1.25:
-			# This contour is too wide to be a single symbol
-			# Split it in half into two symbol regions
-			half_width = width // 2
-			symbol_regions.append((left, top, half_width, height))
-			symbol_regions.append((left + half_width, top, half_width, height))
-		else:
-			# This is a normal symbol by itself
-			symbol_regions.append((left, top, width, height))
-
-	symbol_regions.sort(key = lambda x: x[0], reverse = False)
-	return symbol_regions
+	symbol_contours: List[ndarray] = [
+		x for x in contours
+		if count_pixels(image, x) >= symbol_filter_parameters.min_pixels_per_symbol]
+	# Sort the contours by theirs left borders
+	symbol_contours.sort(key = lambda x: cv2.boundingRect(x)[0], reverse = False)
+	return symbol_contours
 
 
 def extend_to_square(image: MatLike) -> MatLike:
@@ -79,9 +121,11 @@ def resize(image: MatLike, new_width: int, new_height: int) -> MatLike:
 def split_into_symbols_and_save(image_file_name: str):
 	image = cv2.imread(image_file_name)
 	processed_image = preprocess_image(image)
-	symbol_regions = extract_symbols(processed_image)
-	for index, symbol_region in enumerate(symbol_regions):
-		letter = crop_with_padding(processed_image, symbol_region, 2)
+	symbol_filter_parameters = SymbolFilterParameters(
+		processed_image.shape[0] * processed_image.shape[1] // 900)
+	symbol_contours = extract_symbol_contours(processed_image, symbol_filter_parameters)
+	for index, symbol_contour in enumerate(symbol_contours):
+		letter = crop(processed_image, symbol_contour, 2)
 		square_symbol = extend_to_square(letter)
 		resized_symbol = resize(square_symbol, 28, 28)
 		cv2.imwrite(f"{Path(image_file_name).stem}.{index}.png", resized_symbol)
