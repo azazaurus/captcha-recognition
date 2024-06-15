@@ -1,7 +1,9 @@
 import math
 import os
+import shutil
 import string
 import time
+from pathlib import Path
 from typing import Dict, List, Optional, TextIO, Tuple
 
 import norse.torch as snn
@@ -164,15 +166,40 @@ def train(
 	return losses
 
 
+def check_presence_and_index_to_dirpath(dirpath_str: str) -> str:
+	dirpath = Path(dirpath_str)
+	directories_names = os.listdir(dirpath.parent)
+	eponymous_directories = 1
+	for x in directories_names:
+		if x.startswith(dirpath.name):
+			eponymous_directories += 1
+
+	return dirpath_str + " (" + str(eponymous_directories) + ")"
+
+
+def save_error_symbol_image_and_prediction(prediction, symbol_label, symbol_index, dir_path):
+	src = os.path.join("error", "all-captcha", Path(dir_path).name, f"{symbol_index}.{symbol_label}.png")
+	if not Path(src).is_file(): # protection from some nasty bug in PyTorch
+		return
+
+	os.makedirs(dir_path, exist_ok = True)
+	dst = os.path.join(dir_path, f"{symbol_index}.{symbol_label} ({prediction}).png")
+	shutil.copy(src, dst)
+
+
 def test(
 		device: torch.device,
 		model: torch.nn.Module,
 		data_loader: torch.utils.data.DataLoader,
 		captcha_alphabet_map: Dict[str, int],
 		labels_map: List[str],
-		test_results_file: TextIO
+		epoch: int,
+		test_results_file: TextIO,
+		save_error_symbol_images = False
 	) -> Tuple[float, float]:
 	model.eval()
+	if save_error_symbol_images:
+		os.makedirs(os.path.join("error", f"epoch-{epoch}"), exist_ok = True)
 
 	loss_sum = 0.0
 	assessed_samples = 0
@@ -194,8 +221,16 @@ def test(
 			is_correct_prediction = captcha_prediction == label[0]
 			if is_correct_prediction:
 				correct_predictions_count += 1
+			elif save_error_symbol_images:
+				dir_path = check_presence_and_index_to_dirpath(os.path.join("error", f"epoch-{epoch}", label[0]))
+				for i in range(len(predictions)):
+					correct_symbol = label[0][i] if i < len(label[0]) else ""
+					if labels_map[predictions[i].item()] != correct_symbol:
+						save_error_symbol_image_and_prediction(labels_map[predictions[i].item()], correct_symbol, i, dir_path)
 
 			test_results_file.write(f"{label[0]},{captcha_prediction},{1 if is_correct_prediction else 0}\n")
+
+	shutil.rmtree(os.path.join("error", "all-captcha"), ignore_errors = True)
 
 	average_loss = loss_sum / assessed_samples if assessed_samples > 0 else math.nan
 	accuracy = 100 * correct_predictions_count / len(data_loader.dataset)
@@ -308,6 +343,7 @@ def main(
 				test_loader,
 				captcha_alphabet_map,
 				list(CaptchaRecognizer.captcha_alphabet),
+				epoch,
 				test_results_file)
 		epoch_end_time = time.perf_counter_ns()
 

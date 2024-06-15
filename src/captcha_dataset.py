@@ -1,3 +1,5 @@
+import os
+from pathlib import Path
 from typing import Any, Callable, List, Optional, Union
 
 import PIL.Image
@@ -58,7 +60,23 @@ class CaptchaDataset(ImageFolder):
 		return opencv_to_pil(transformed_image)
 
 
-def test_captcha_transform(image: MatLike) -> List[MatLike]:
+def check_presence_and_index_to_dirpath(dirpath_str: str) -> str:
+	dirpath = Path(dirpath_str)
+	directories_names = os.listdir(dirpath.parent)
+	eponymous_directories = 1
+	for x in directories_names:
+		if x.startswith(dirpath.name):
+			eponymous_directories += 1
+
+	return dirpath_str + " (" + str(eponymous_directories) + ")"
+
+
+def save_symbol_image(image: MatLike, filename: str) -> None:
+	os.makedirs(Path(filename).parent, exist_ok = True)
+	cv2.imwrite(filename, image)
+
+
+def test_captcha_transform(image: MatLike, label) -> List[MatLike]:
 	preprocessed_image = preprocess_image(image)
 	symbol_filter_parameters = SymbolFilterParameters(
 		preprocessed_image.shape[0] * preprocessed_image.shape[1] // 900)
@@ -69,12 +87,18 @@ def test_captcha_transform(image: MatLike) -> List[MatLike]:
 		resized_image = resize(square_image, 28, 28)
 		return [resized_image]
 
+	os.makedirs(os.path.join("error", "all-captcha"), exist_ok = True)
+	dir_template = os.path.join("error", "all-captcha", label)
+	dir_path = check_presence_and_index_to_dirpath(dir_template)
+
 	symbols: List[MatLike] = []
-	for symbol_contour in symbol_contours:
-		symbol = crop(preprocessed_image, symbol_contour, 2)
+	for i in range(0, len(symbol_contours)):
+		symbol = crop(preprocessed_image, symbol_contours[i], 2)
 		square_symbol = extend_to_square(symbol)
 		resized_symbol = resize(square_symbol, 28, 28)
 		symbols.append(resized_symbol)
+		filename = os.path.join(dir_path, f"{i}.{label[i] if i < len(label) else ''}.png")
+		save_symbol_image(resized_symbol, filename)
 
 	return symbols
 
@@ -83,7 +107,7 @@ class TestCaptchaDataset(ImageFolder):
 	def __init__(
 			self,
 			root: str,
-			pre_transform: Callable[[MatLike], List[MatLike]] = test_captcha_transform,
+			pre_transform: Callable[[MatLike, str], List[MatLike]] = test_captcha_transform,
 			transform: Optional[Callable] = None
 	) -> None:
 		super().__init__(
@@ -94,9 +118,10 @@ class TestCaptchaDataset(ImageFolder):
 		self.index_to_class_map = list(
 			class_ for (class_, _) in sorted(self.class_to_idx.items(), key = lambda x: x[1]))
 
-	def load_file(self, file_name: str, pre_transform: Callable[[MatLike], List[MatLike]]) -> List[PIL.Image.Image]:
+	def load_file(self, file_name: str, pre_transform: Callable[[MatLike, str], List[MatLike]]) -> List[PIL.Image.Image]:
 		image = cv2.imread(file_name)
-		transformed_images = pre_transform(image)
+		captcha_label = Path(file_name).parent.name
+		transformed_images = pre_transform(image, captcha_label)
 		return [opencv_to_pil(image) for image in transformed_images]
 
 	def captcha_transform(
