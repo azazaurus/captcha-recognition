@@ -23,26 +23,32 @@ class CaptchaRecognizer(torch.nn.Module):
 		super(CaptchaRecognizer, self).__init__()
 
 		self.input_features_count = channels_count * image_width * image_height
-		self.fc_input_features_count = (64
-			* (((image_width - 4) // 2 - 4) // 2)
-			* (((image_height - 4) // 2 - 4) // 2))
+		self.fc_input_features_count = (256
+			* ((((image_width - 2) // 2 - 2) // 2 - 2) // 2)
+			* ((((image_height - 2) // 2 - 2) // 2 - 2) // 2))
 		self.timesteps_count = timesteps_count
 
 		self.constant_current_encoder = snn.ConstantCurrentLIFEncoder(timesteps_count)
-		self.conv0 = torch.nn.Conv2d(channels_count, 32, 5, 1)
+		self.conv0 = torch.nn.Conv2d(channels_count, 128, 3, 1)
 		self.lif0 = snn.LIFCell(
 			snn.LIFParameters(
 				method = "super",
 				alpha = torch.tensor(100.0),
 				v_th = torch.as_tensor(0.7)))
-		self.conv1 = torch.nn.Conv2d(32, 64, 5, 1)
+		self.conv1 = torch.nn.Conv2d(128, 128, 3, 1)
 		self.lif1 = snn.LIFCell(
 			snn.LIFParameters(
 				method = "super",
 				alpha = torch.tensor(100.0),
 				v_th = torch.as_tensor(0.7)))
+		self.conv2 = torch.nn.Conv2d(128, 256, 3, 1)
+		self.lif2 = snn.LIFCell(
+			snn.LIFParameters(
+				method = "super",
+				alpha = torch.tensor(100.0),
+				v_th = torch.as_tensor(0.7)))
 		self.fc0 = torch.nn.Linear(self.fc_input_features_count, 1024)
-		self.lif2 = snn.LIFCell(snn.LIFParameters(method = "super", alpha = torch.tensor(100.0)))
+		self.lif3 = snn.LIFCell(snn.LIFParameters(method = "super", alpha = torch.tensor(100.0)))
 		self.out = snn.LILinearCell(1024, len(CaptchaRecognizer.captcha_alphabet))
 
 	def forward(self, images_batch: Tensor) -> Tensor:
@@ -55,6 +61,7 @@ class CaptchaRecognizer(torch.nn.Module):
 		lif0_state = None
 		lif1_state = None
 		lif2_state = None
+		lif3_state = None
 		out_state = None
 		timestep_outputs: List[Tensor] = []
 		for timestep in range(self.timesteps_count):
@@ -65,9 +72,12 @@ class CaptchaRecognizer(torch.nn.Module):
 			timestep_output = self.conv1(timestep_output)
 			timestep_output, lif1_state = self.lif1(timestep_output, lif1_state)
 			timestep_output = torch.nn.functional.max_pool2d(timestep_output, 2, 2)
+			timestep_output = self.conv2(timestep_output)
+			timestep_output, lif2_state = self.lif2(timestep_output, lif2_state)
+			timestep_output = torch.nn.functional.max_pool2d(timestep_output, 2, 2)
 			timestep_output = timestep_output.view(batch_size, self.fc_input_features_count)
 			timestep_output = self.fc0(timestep_output)
-			timestep_output, lif2_state = self.lif2(timestep_output, lif2_state)
+			timestep_output, lif3_state = self.lif3(timestep_output, lif3_state)
 			timestep_output = torch.nn.functional.relu(timestep_output)
 			timestep_output, out_state = self.out(timestep_output, out_state)
 			timestep_outputs.append(timestep_output)
@@ -278,7 +288,7 @@ def main(
 		device_type: str = "cpu",
 		max_epoch_count: Optional[int] = None,
 		early_stopping_epoch_count: Optional[int] = 10,
-		batch_size: int = 32,
+		batch_size: int = 8,
 		learning_rate: float = 2e-3,
 		image_timesteps_count: int = 200,
 		reports_count_per_epoch: int = 7500,
