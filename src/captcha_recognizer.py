@@ -19,61 +19,32 @@ from captcha_dataset import CaptchaDataset, TestCaptchaDataset
 class CaptchaRecognizer(torch.nn.Module):
 	captcha_alphabet: str = string.digits + string.ascii_uppercase
 
-	def __init__(self, timesteps_count: int, channels_count: int, image_width: int, image_height: int) -> None:
+	def __init__(self, channels_count: int, image_width: int, image_height: int) -> None:
 		super(CaptchaRecognizer, self).__init__()
 
-		self.input_features_count = channels_count * image_width * image_height
 		self.fc_input_features_count = (64
 			* (((image_width - 4) // 2 - 4) // 2)
 			* (((image_height - 4) // 2 - 4) // 2))
-		self.timesteps_count = timesteps_count
 
-		self.constant_current_encoder = snn.ConstantCurrentLIFEncoder(timesteps_count)
 		self.conv0 = torch.nn.Conv2d(channels_count, 32, 5, 1)
-		self.lif0 = snn.LIFCell(
-			snn.LIFParameters(
-				method = "super",
-				alpha = torch.tensor(100.0),
-				v_th = torch.as_tensor(0.7)))
+		self.relu0 = torch.nn.ReLU()
 		self.conv1 = torch.nn.Conv2d(32, 64, 5, 1)
-		self.lif1 = snn.LIFCell(
-			snn.LIFParameters(
-				method = "super",
-				alpha = torch.tensor(100.0),
-				v_th = torch.as_tensor(0.7)))
+		self.relu1 = torch.nn.ReLU()
 		self.fc0 = torch.nn.Linear(self.fc_input_features_count, 1024)
-		self.lif2 = snn.LIFCell(snn.LIFParameters(method = "super", alpha = torch.tensor(100.0)))
-		self.out = snn.LILinearCell(1024, len(CaptchaRecognizer.captcha_alphabet))
+		self.relu3 = torch.nn.ReLU()
+		self.out = torch.nn.Linear(1024, len(CaptchaRecognizer.captcha_alphabet))
 
-	def forward(self, images_batch: Tensor) -> Tensor:
-		batch_size = images_batch.shape[0]
-		input_spikes = self.constant_current_encoder(
-			# Flatten the images
-			images_batch.view(batch_size, self.input_features_count))
-		input_spikes = input_spikes.reshape(self.timesteps_count, *images_batch.shape)
-
-		lif0_state = None
-		lif1_state = None
-		lif2_state = None
-		out_state = None
-		timestep_outputs: List[Tensor] = []
-		for timestep in range(self.timesteps_count):
-			timestep_output = self.conv0(input_spikes[timestep])
-			timestep_output, lif0_state = self.lif0(timestep_output, lif0_state)
-			timestep_output = torch.nn.functional.max_pool2d(timestep_output, 2, 2)
-			timestep_output *= 10
-			timestep_output = self.conv1(timestep_output)
-			timestep_output, lif1_state = self.lif1(timestep_output, lif1_state)
-			timestep_output = torch.nn.functional.max_pool2d(timestep_output, 2, 2)
-			timestep_output = timestep_output.view(batch_size, self.fc_input_features_count)
-			timestep_output = self.fc0(timestep_output)
-			timestep_output, lif2_state = self.lif2(timestep_output, lif2_state)
-			timestep_output = torch.nn.functional.relu(timestep_output)
-			timestep_output, out_state = self.out(timestep_output, out_state)
-			timestep_outputs.append(timestep_output)
-
-		# Gather output over all timesteps
-		output = torch.max(torch.stack(timestep_outputs), 0).values
+	def forward(self, x):
+		x = self.conv0(x)
+		x = self.relu0(x)
+		x = torch.nn.functional.max_pool2d(x, 2, 2)
+		x = self.conv1(x)
+		x = self.relu1(x)
+		x = torch.nn.functional.max_pool2d(x, 2, 2)
+		x = torch.flatten(x, 1)
+		x = self.fc0(x)
+		x = self.relu3(x)
+		output = self.out(x)
 		output = torch.nn.functional.log_softmax(output, dim = 1)
 
 		return output
@@ -277,7 +248,6 @@ def main(
 		early_stopping_epoch_count: Optional[int] = 10,
 		batch_size: int = 32,
 		learning_rate: float = 2e-3,
-		image_timesteps_count: int = 200,
 		reports_count_per_epoch: int = 7500,
 		input_model_file_name: Optional[str] = None,
 		output_model_file_name: Optional[str] = "model-{0}.pt",
@@ -303,7 +273,7 @@ def main(
 	test_loader = torch.utils.data.DataLoader(test_dataset, **loader_parameters)
 	os.makedirs("test-results", exist_ok = True)
 
-	model = CaptchaRecognizer(image_timesteps_count, 1, 28, 28).to(device)
+	model = CaptchaRecognizer(1, 28, 28).to(device)
 	optimizer = torch.optim.Adam(model.parameters(), lr = learning_rate)
 	captcha_alphabet_map = {x[1]: x[0] for x in enumerate(CaptchaRecognizer.captcha_alphabet)}
 
