@@ -179,9 +179,6 @@ def check_presence_and_index_to_dirpath(dirpath_str: str) -> str:
 
 def save_error_symbol_image_and_prediction(prediction, symbol_label, symbol_index, dir_path):
 	src = os.path.join("error", "all-captcha", Path(dir_path).name, f"{symbol_index}.{symbol_label}.png")
-	if not Path(src).is_file(): # protection from some nasty bug in PyTorch
-		return
-
 	os.makedirs(dir_path, exist_ok = True)
 	dst = os.path.join(dir_path, f"{symbol_index}.{symbol_label} ({prediction}).png")
 	shutil.copy(src, dst)

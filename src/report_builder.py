@@ -63,8 +63,6 @@ def test(
 			targets.append(target.numpy())
 			predictions.append(sample_prediction.numpy())
 
-	shutil.rmtree(os.path.join("error", "all-captcha"), ignore_errors = True)
-
 	average_loss = loss_sum / assessed_samples if assessed_samples > 0 else math.nan
 	accuracy = 100 * correct_predictions_count / len(data_loader.dataset)
 	return TestResults(average_loss, accuracy, labels, targets, predictions)
@@ -82,6 +80,8 @@ def write_incorrect_prediction_images(epoch: int, test_results: TestResults, lab
 					correct_symbol,
 					i,
 					dir_path)
+
+	shutil.rmtree(os.path.join("error", "all-captcha"), ignore_errors = True)
 
 
 def write_model_characteristics(epoch: int, test_results: TestResults, report_writer: Any) -> None:
