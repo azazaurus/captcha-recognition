@@ -195,7 +195,7 @@ def test(
 		labels_map: List[str],
 		epoch: int,
 		test_results_file: TextIO,
-		save_error_symbol_images = False
+		save_error_symbol_images = True
 	) -> Tuple[float, float]:
 	model.eval()
 	if save_error_symbol_images:
