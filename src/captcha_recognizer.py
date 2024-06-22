@@ -29,6 +29,7 @@ class CaptchaRecognizer(torch.nn.Module):
 		self.timesteps_count = timesteps_count
 
 		self.constant_current_encoder = snn.ConstantCurrentLIFEncoder(timesteps_count)
+		self.dropout = torch.nn.Dropout(0.2)
 		self.conv0 = torch.nn.Conv2d(channels_count, 32, 5, 1)
 		self.lif0 = snn.LIFCell(
 			snn.LIFParameters(
@@ -58,7 +59,8 @@ class CaptchaRecognizer(torch.nn.Module):
 		out_state = None
 		timestep_outputs: List[Tensor] = []
 		for timestep in range(self.timesteps_count):
-			timestep_output = self.conv0(input_spikes[timestep])
+			timestep_output = self.dropout(input_spikes[timestep])
+			timestep_output = self.conv0(timestep_output)
 			timestep_output, lif0_state = self.lif0(timestep_output, lif0_state)
 			timestep_output = torch.nn.functional.max_pool2d(timestep_output, 2, 2)
 			timestep_output *= 10
