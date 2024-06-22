@@ -26,6 +26,7 @@ class CaptchaRecognizer(torch.nn.Module):
 			* (((image_width - 4) // 2 - 4) // 2)
 			* (((image_height - 4) // 2 - 4) // 2))
 
+		self.dropout = torch.nn.Dropout(0.2)
 		self.conv0 = torch.nn.Conv2d(channels_count, 32, 5, 1)
 		self.relu0 = torch.nn.ReLU()
 		self.conv1 = torch.nn.Conv2d(32, 64, 5, 1)
@@ -35,6 +36,7 @@ class CaptchaRecognizer(torch.nn.Module):
 		self.out = torch.nn.Linear(1024, len(CaptchaRecognizer.captcha_alphabet))
 
 	def forward(self, x):
+		x = self.dropout(x)
 		x = self.conv0(x)
 		x = self.relu0(x)
 		x = torch.nn.functional.max_pool2d(x, 2, 2)
