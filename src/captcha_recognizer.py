@@ -4,7 +4,7 @@ import shutil
 import string
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, TextIO, Tuple
+from typing import Callable, Dict, List, Optional, TextIO, Tuple
 
 import norse.torch as snn
 import numpy
@@ -108,7 +108,7 @@ class ModelParameters:
 			epoch: int,
 			epochs_without_progress_in_row: int,
 			model: torch.nn.Module,
-			optimizer: torch.optim.Optimizer,
+			optimizer: Optional[torch.optim.Optimizer],
 			accuracy: float,
 			max_accuracy: float,
 			best_test_loss: float):
@@ -244,15 +244,24 @@ def to_target(label: str, alphabet_map: Dict[str, int]) -> Tuple[LongTensor]:
 	return torch.as_tensor([alphabet_map[symbol] for symbol in list(label)], dtype = torch.long)
 
 
+def create_symbol_image_transform() -> Callable:
+	return torchvision.transforms.Compose([
+		torchvision.transforms.ToTensor(),
+		# leave only one channel since they're all the same
+		torchvision.transforms.Lambda(lambda x: x[0:1, :, :]),
+		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
+
+
 def load(
 		file_path: str,
 		model: torch.nn.Module,
-		optimizer: torch.optim.Optimizer
+		optimizer: Optional[torch.optim.Optimizer]
 	) -> ModelParameters:
 	dto: ModelDto = torch.load(file_path)
 
 	model.load_state_dict(dto.model_state)
-	optimizer.load_state_dict(dto.optimizer_state)
+	if optimizer is not None:
+		optimizer.load_state_dict(dto.optimizer_state)
 	return ModelParameters(
 		dto.epoch,
 		dto.epochs_without_progress_in_row,
@@ -295,11 +304,7 @@ def main(
 
 	device: torch.device = torch.device(device_type)
 
-	image_transform = torchvision.transforms.Compose([
-		torchvision.transforms.ToTensor(),
-		# leave only one channel since they're all the same
-		torchvision.transforms.Lambda(lambda x: x[0:1, :, :]),
-		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
+	image_transform = create_symbol_image_transform()
 	loader_parameters = {"num_workers": 1, "pin_memory": True} if device_type == "cuda" else {}
 	train_dataset = CaptchaDataset("ds-1/", transform = image_transform)
 	train_loader = torch.utils.data.DataLoader(train_dataset, batch_size, True, **loader_parameters)
