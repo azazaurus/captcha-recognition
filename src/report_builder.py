@@ -6,7 +6,6 @@ from typing import Any, Dict, List, NamedTuple, TextIO, Tuple
 
 import numpy
 import torch
-import torchvision
 from numpy import ndarray
 from sklearn import metrics
 from torch import LongTensor, Tensor
@@ -17,6 +16,7 @@ from captcha_recognizer import (
 	CaptchaRecognizer,
 	ModelDto,
 	check_presence_and_index_to_dirpath,
+	create_symbol_image_transform,
 	save_error_symbol_image_and_prediction)
 
 
@@ -146,11 +146,7 @@ def main(
 	model_file_paths.sort(key = lambda x: x[0])
 
 	device: torch.device = torch.device(device_type)
-	image_transform = torchvision.transforms.Compose([
-		torchvision.transforms.ToTensor(),
-		# leave only one channel since they're all the same
-		torchvision.transforms.Lambda(lambda x: x[0:1, :, :]),
-		torchvision.transforms.Normalize((0.1307,), (0.3081,))])
+	image_transform = create_symbol_image_transform()
 	loader_parameters = {"num_workers": 1, "pin_memory": True} if device_type == "cuda" else {}
 	test_dataset = TestCaptchaDataset(dataset_directory_name, transform = image_transform)
 	test_loader = torch.utils.data.DataLoader(test_dataset, **loader_parameters)
