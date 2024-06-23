@@ -17,7 +17,9 @@ from captcha_dataset import CaptchaDataset, TestCaptchaDataset
 
 
 class CaptchaRecognizer(torch.nn.Module):
-	captcha_alphabet: str = string.digits + string.ascii_uppercase
+	captcha_alphabet: str = "".join(
+		character for character in string.digits + string.ascii_uppercase
+			if character not in {"0", "l"})
 
 	def __init__(self, timesteps_count: int, channels_count: int, image_width: int, image_height: int) -> None:
 		super(CaptchaRecognizer, self).__init__()
