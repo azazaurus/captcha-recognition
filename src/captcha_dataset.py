@@ -76,7 +76,7 @@ def save_symbol_image(image: MatLike, filename: str) -> None:
 	cv2.imwrite(filename, image)
 
 
-def test_captcha_transform(image: MatLike, label) -> List[MatLike]:
+def test_captcha_transform(image: MatLike, label: Optional[str] = None) -> List[MatLike]:
 	preprocessed_image = preprocess_image(image)
 	symbol_filter_parameters = SymbolFilterParameters(
 		preprocessed_image.shape[0] * preprocessed_image.shape[1] // 900)
@@ -87,9 +87,10 @@ def test_captcha_transform(image: MatLike, label) -> List[MatLike]:
 		resized_image = resize(square_image, 28, 28)
 		return [resized_image]
 
-	os.makedirs(os.path.join("error", "all-captcha"), exist_ok = True)
-	dir_template = os.path.join("error", "all-captcha", label)
-	dir_path = check_presence_and_index_to_dirpath(dir_template)
+	if label is not None:
+		os.makedirs(os.path.join("error", "all-captcha"), exist_ok = True)
+		dir_template = os.path.join("error", "all-captcha", label)
+		dir_path = check_presence_and_index_to_dirpath(dir_template)
 
 	symbols: List[MatLike] = []
 	for i in range(0, len(symbol_contours)):
@@ -97,8 +98,10 @@ def test_captcha_transform(image: MatLike, label) -> List[MatLike]:
 		square_symbol = extend_to_square(symbol)
 		resized_symbol = resize(square_symbol, 28, 28)
 		symbols.append(resized_symbol)
-		filename = os.path.join(dir_path, f"{i}.{label[i] if i < len(label) else ''}.png")
-		save_symbol_image(resized_symbol, filename)
+		
+		if label is not None:
+			filename = os.path.join(dir_path, f"{i}.{label[i] if i < len(label) else ''}.png")
+			save_symbol_image(resized_symbol, filename)
 
 	return symbols
 
